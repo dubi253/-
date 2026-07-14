@@ -1,114 +1,57 @@
 name: Download LiteLLM Offline Images Suite
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 支持在 GitHub Action 页面手动点击按钮触发
 
 jobs:
-  download:
+  build:
     runs-on: ubuntu-latest
-    concurrency:
-      group: download-images-${{ github.run_id }}
-      cancel-in-progress: true
-    timeout-minutes: 120
-    strategy:
-      max-parallel: 3
-      matrix:
-        include:
-          - image: docker.litellm.ai/berriai/litellm:main-stable
-          - image: postgres:16
-          - image: prom/prometheus:latest
-          - image: grafana/grafana:latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
 
-      # No registry authentication required for public images
-
-      - name: Prepare compression tool
+      - name: Pull, Measure and Package Images Individually
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y pigz
+          # 1. 定义需要下载的特定镜像列表
+          IMAGES=(
+            "docker.litellm.ai/berriai/litellm:main-stable"
+            "postgres:16"
+            "prom/prometheus"
+            grafana/grafana:latest
+          )
 
-      - name: Pull, compress and prepare artifact
-        id: pack
-        env:
-          IMAGE: ${{ matrix.image }}
-          MAX_MB_TOTAL: 20000
-          SPLIT_MB: 30000
-        run: |
-          set -euo pipefail
-          echo "Processing image: $IMAGE"
+          echo "=========================================="
+          echo "开始处理镜像（共 ${#IMAGES[@]} 个）..."
+          echo "=========================================="
 
-          retry() {
-            local n=0
-            local max=5
-            local delay=5
-            until "$@"; do
-              n=$((n+1))
-              if [ $n -ge $max ]; then
-                echo "Command failed after $n attempts: $*"
-                return 1
-              fi
-              sleep $((delay * n))
-              echo "Retrying ($n/$max): $*"
-            done
-          }
+          for img in "${IMAGES[@]}"; do
+            echo "------------------------------------------"
+            echo ">> 正在下载: $img ..."
+            docker pull "$img"
+            
+            # 输出该镜像在 Docker 中的大小
+            echo ">> 镜像下载完成，大小为："
+            docker images --format "{{.Size}}" "$img"
 
-          retry docker pull "$IMAGE"
+            # 将镜像名称中的 / 和 : 替换为下划线 _，以便作为安全的文件名
+            SAFE_NAME=$(echo "$img" | tr '/:' '__')
+            OUTPUT_NAME="${SAFE_NAME}.tar.gz"
 
-          echo ">> 镜像在本地的大小（参考）:"
-          docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep -F "$(echo $IMAGE | cut -d: -f1)" || true
+            echo ">> 正在独立打包并压缩: $OUTPUT_NAME ..."
+            docker save "$img" | gzip > "$OUTPUT_NAME"
 
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE" 2>/dev/null || true)
-          if [ -z "$DIGEST" ]; then
-            DIGEST=$(docker images --format '{{.Repository}}@{{.Digest}}' | grep -F "$(echo $IMAGE | cut -d: -f1)" | head -n1 || true)
-          fi
-          SHORT_DIGEST=${DIGEST##*@}
-          SHORT_DIGEST=${SHORT_DIGEST:-nodigest}
-          SHORT_DIGEST=${SHORT_DIGEST:0:12}
+            echo ">> 打包成功！压缩包实际大小为："
+            du -sh "$OUTPUT_NAME"
+          done
+          
+          echo "=========================================="
+          echo "所有镜像处理完毕！"
+          echo "=========================================="
 
-          SAFE_NAME=$(echo "$IMAGE" | tr '/:' '__' | sed 's/@/_/g')
-          OUT="${SAFE_NAME}-${SHORT_DIGEST}-${{ github.run_id }}.tar.gz"
-          if [ "${IMAGE##*:}" = "latest" ]; then
-            echo "WARNING: processing image with :latest tag; artifact will include resolved digest: $SHORT_DIGEST"
-          fi
-
-          echo ">> Saving and compressing to $OUT"
-          docker save "$IMAGE" | pigz -9 -p $(nproc) > "$OUT"
-
-          MB=$(du -m "$OUT" | cut -f1)
-          echo ">> Artifact size (MB): $MB"
-          if [ "$MB" -gt "$MAX_MB_TOTAL" ]; then
-            echo "Artifact exceeds total allowed size ($MB MB > $MAX_MB_TOTAL MB) — aborting"
-            exit 2
-          fi
-
-          # If artifact is larger than SPLIT_MB, split into parts (e.g., 4.5GB parts)
-          if [ "$MB" -gt "$SPLIT_MB" ]; then
-            echo ">> Splitting $OUT into ${SPLIT_MB}MB parts"
-            PART_PREFIX="${OUT}.part."
-            split -b ${SPLIT_MB}M "$OUT" "$PART_PREFIX"
-            rm -f "$OUT"
-            UPLOAD_PATH="${PART_PREFIX}*"
-            ARTIFACT_NAME="${SAFE_NAME}-${SHORT_DIGEST}-${{ github.run_id }}-parts"
-          else
-            UPLOAD_PATH="$OUT"
-            ARTIFACT_NAME="$OUT"
-          fi
-
-          echo "upload_path=$UPLOAD_PATH" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
-
-      - name: Upload Image Artifact
-        uses: actions/upload-artifact@v7
+      - name: Upload Image Artifacts
+        uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ steps.pack.outputs.artifact_name }}
-          path: ${{ steps.pack.outputs.upload_path }}
-          retention-days: 1
-
-      - name: Cleanup file and image
-        run: |
-          rm -f "${{ steps.pack.outputs.upload_path }}" || true
-          docker image rm "${{ matrix.image }}" || true
-          docker system prune -af --volumes || true
+          name: separate-images-package
+          # 使用通配符匹配所有生成的 tar.gz 文件
+          path: "*.tar.gz"
+          retention-days: 1 # 在 GitHub 上临时保留 1 天
