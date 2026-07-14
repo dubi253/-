@@ -1,0 +1,65 @@
+name: Download Dify Full Offline Images Suite
+
+on:
+  workflow_dispatch: # 支持在 GitHub Action 页面手动点击按钮触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7.0.0
+
+      - name: Pull and Package All Dify Images
+        run: |
+          # 集中定义 Dify 核心、中间件及所有可选向量数据库镜像
+          IMAGES=(
+            # ==== 一、 Dify 官方核心镜像 (4个) ====
+            "langgenius/dify-api:1.14.2"
+            "langgenius/dify-web:1.14.2"
+            "langgenius/dify-sandbox:0.2.15"
+            "langgenius/dify-plugin-daemon:0.6.1-local"
+
+            # ==== 二、 基础架构与公共中间件镜像 (7个) ====
+            "nginx:latest"
+            "ubuntu/squid:latest"
+            "redis:6-alpine"
+            "postgres:15-alpine"
+            "mysql:8.0"
+            "certbot/certbot"
+            "busybox:latest"
+
+            # ==== 三、 可选向量数据库镜像 (6个) ====
+            "semitechnologies/weaviate:1.27.0"
+            "langgenius/qdrant:v1.8.3"
+            "pgvector/pgvector:pg16"
+            "tensorchord/pgvecto-rs:pg16-v0.3.0"
+            "oceanbase/oceanbase-ce:4.3.5-lts"
+            "oceanbase/seekdb:latest"
+          )
+
+          echo "=========================================="
+          echo "1. 开始从官方 Hub 串行拉取所有 Dify 镜像（共 ${#IMAGES[@]} 个）..."
+          echo "=========================================="
+          for img in "${IMAGES[@]}"; do
+            echo "正在下载: $img ..."
+            docker pull "$img"
+          done
+
+          echo "=========================================="
+          echo "2. 正在合并打包并进行 gzip 极限压缩..."
+          echo "=========================================="
+          OUTPUT_NAME="dify-full-images.tar.gz"
+          docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
+          
+          echo "=========================================="
+          echo "打包成功！Dify 全套离线大礼包最终大小为："
+          du -sh "$OUTPUT_NAME"
+          echo "=========================================="
+
+      - name: Upload Artifact to GitHub
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: dify-full-images-package
+          path: dify-full-images.tar.gz
+          retention-days: 2 # 在 GitHub 上临时保留 2 天供你点击下载

@@ -1,0 +1,51 @@
+name: Download SGLang Offline Image
+
+on:
+  workflow_dispatch: # 支持在 GitHub Action 页面手动点击按钮触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7.0.0
+
+      - name: Disk Space Reclaimer
+        uses: insightsengineering/disk-space-reclaimer@v1.1.2
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tools-cache: false
+
+      - name: Pull and Package Images
+        run: |
+          IMAGES=(
+            "lmsysorg/sglang:latest-cu130-runtime"
+            "lmsysorg/sglang:latest-cu129-runtime"
+          )
+          OUTPUT_NAME="sglang-images.tar.gz"
+
+          echo "=========================================="
+          echo "1. 开始拉取 SGLang 镜像（共 ${#IMAGES[@]} 个）..."
+          echo "=========================================="
+          for img in "${IMAGES[@]}"; do
+            echo "正在下载: $img ..."
+            docker pull "$img"
+          done
+
+          echo "=========================================="
+          echo "2. 正在合并打包并进行 gzip 极限压缩..."
+          echo "=========================================="
+          docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
+
+          echo "=========================================="
+          echo "打包成功！SGLang 离线包最终大小为："
+          du -sh "$OUTPUT_NAME"
+          echo "=========================================="
+
+      - name: Upload Artifact to GitHub
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: sglang-images.tar.gz
+          path: sglang-images.tar.gz
+          retention-days: 2 # 在 GitHub 上临时保留 2 天供你点击下载

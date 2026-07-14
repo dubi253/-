@@ -1,0 +1,114 @@
+name: Download LiteLLM Offline Images Suite
+
+on:
+  workflow_dispatch:
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: download-images-${{ github.run_id }}
+      cancel-in-progress: true
+    timeout-minutes: 120
+    strategy:
+      max-parallel: 3
+      matrix:
+        include:
+          - image: docker.litellm.ai/berriai/litellm:main-stable
+          - image: postgres:16
+          - image: prom/prometheus:latest
+          - image: grafana/grafana:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+
+      # No registry authentication required for public images
+
+      - name: Prepare compression tool
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y pigz
+
+      - name: Pull, compress and prepare artifact
+        id: pack
+        env:
+          IMAGE: ${{ matrix.image }}
+          MAX_MB_TOTAL: 20000
+          SPLIT_MB: 4500
+        run: |
+          set -euo pipefail
+          echo "Processing image: $IMAGE"
+
+          retry() {
+            local n=0
+            local max=5
+            local delay=5
+            until "$@"; do
+              n=$((n+1))
+              if [ $n -ge $max ]; then
+                echo "Command failed after $n attempts: $*"
+                return 1
+              fi
+              sleep $((delay * n))
+              echo "Retrying ($n/$max): $*"
+            done
+          }
+
+          retry docker pull "$IMAGE"
+
+          echo ">> 镜像在本地的大小（参考）:"
+          docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep -F "$(echo $IMAGE | cut -d: -f1)" || true
+
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE" 2>/dev/null || true)
+          if [ -z "$DIGEST" ]; then
+            DIGEST=$(docker images --format '{{.Repository}}@{{.Digest}}' | grep -F "$(echo $IMAGE | cut -d: -f1)" | head -n1 || true)
+          fi
+          SHORT_DIGEST=${DIGEST##*@}
+          SHORT_DIGEST=${SHORT_DIGEST:-nodigest}
+          SHORT_DIGEST=${SHORT_DIGEST:0:12}
+
+          SAFE_NAME=$(echo "$IMAGE" | tr '/:' '__' | sed 's/@/_/g')
+          OUT="${SAFE_NAME}-${SHORT_DIGEST}-${{ github.run_id }}.tar.gz"
+          if [ "${IMAGE##*:}" = "latest" ]; then
+            echo "WARNING: processing image with :latest tag; artifact will include resolved digest: $SHORT_DIGEST"
+          fi
+
+          echo ">> Saving and compressing to $OUT"
+          docker save "$IMAGE" | pigz -9 -p $(nproc) > "$OUT"
+
+          MB=$(du -m "$OUT" | cut -f1)
+          echo ">> Artifact size (MB): $MB"
+          if [ "$MB" -gt "$MAX_MB_TOTAL" ]; then
+            echo "Artifact exceeds total allowed size ($MB MB > $MAX_MB_TOTAL MB) — aborting"
+            exit 2
+          fi
+
+          # If artifact is larger than SPLIT_MB, split into parts (e.g., 4.5GB parts)
+          if [ "$MB" -gt "$SPLIT_MB" ]; then
+            echo ">> Splitting $OUT into ${SPLIT_MB}MB parts"
+            PART_PREFIX="${OUT}.part."
+            split -b ${SPLIT_MB}M "$OUT" "$PART_PREFIX"
+            rm -f "$OUT"
+            UPLOAD_PATH="${PART_PREFIX}*"
+            ARTIFACT_NAME="${SAFE_NAME}-${SHORT_DIGEST}-${{ github.run_id }}-parts"
+          else
+            UPLOAD_PATH="$OUT"
+            ARTIFACT_NAME="$OUT"
+          fi
+
+          echo "upload_path=$UPLOAD_PATH" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Image Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.pack.outputs.artifact_name }}
+          path: ${{ steps.pack.outputs.upload_path }}
+          retention-days: 1
+
+      - name: Cleanup file and image
+        run: |
+          rm -f "${{ steps.pack.outputs.upload_path }}" || true
+          docker image rm "${{ matrix.image }}" || true
+          docker system prune -af --volumes || true
