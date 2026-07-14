@@ -35,7 +35,7 @@ jobs:
         env:
           IMAGE: ${{ matrix.image }}
           MAX_MB_TOTAL: 20000
-          SPLIT_MB: 4500
+          SPLIT_MB: 30000
         run: |
           set -euo pipefail
           echo "Processing image: $IMAGE"
