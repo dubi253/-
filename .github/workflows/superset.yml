@@ -12,8 +12,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7.0.0
 
       - name: Setup Kubernetes Tools
         uses: yokawasa/action-setup-kube-tools@v0.14.0
