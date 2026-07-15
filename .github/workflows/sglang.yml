@@ -21,7 +21,7 @@ jobs:
         run: |
           IMAGES=(
             "lmsysorg/sglang:latest-cu130-runtime"
-            "lmsysorg/sglang:latest-cu129-runtime"
+            # "lmsysorg/sglang:latest-cu129-runtime"
           )
           OUTPUT_NAME="sglang-images.tar.gz"
 
@@ -46,6 +46,6 @@ jobs:
       - name: Upload Artifact to GitHub
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: sglang-images.tar.gz
+          name: sglang-images
           path: sglang-images.tar.gz
-          retention-days: 2 # 在 GitHub 上临时保留 2 天供你点击下载
+          retention-days: 1 # 在 GitHub 上临时保留 2 天供你点击下载
