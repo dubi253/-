@@ -2,12 +2,13 @@ name: Download Multica Offline Images Suite
 
 on:
   workflow_dispatch: # 支持在 GitHub Action 页面手动点击按钮触发
+  schedule:
+    - cron: "30 0 * * *" # 每天 8:30（北京时间；GitHub Actions 使用 UTC）
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-
       - name: Pull and Package All Multica Images
         run: |
           # 定义 Multica 相关的镜像
@@ -26,10 +27,18 @@ jobs:
           done
 
           echo "=========================================="
-          echo "2. 正在合并打包并进行 gzip 极限压缩..."
+          echo "2. 下载 Multica 最新 Release 产物..."
+          curl -L -o multica_linux_amd64.tar.gz \
+            https://github.com/multica-ai/multica/releases/latest/download/multica_linux_amd64.tar.gz
+
           echo "=========================================="
-          OUTPUT_NAME="multica-images.tar.gz"
-          docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
+          echo "3. 正在合并打包并进行 gzip 极限压缩..."
+          echo "=========================================="
+          OUTPUT_NAME="multica-offline-package.tar.gz"
+          STAGING_DIR="$(mktemp -d)"
+          docker save "${IMAGES[@]}" | gzip > "$STAGING_DIR/multica-images.tar.gz"
+          mv multica_linux_amd64.tar.gz "$STAGING_DIR/multica_linux_amd64.tar.gz"
+          tar -czf "$OUTPUT_NAME" -C "$STAGING_DIR" multica-images.tar.gz multica_linux_amd64.tar.gz
 
           echo "=========================================="
           echo "打包成功！Multica 离线包最终大小为："
@@ -39,6 +48,6 @@ jobs:
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: multica-images-package
-          path: multica-images.tar.gz
-          retention-days: 2 # 在 GitHub 上临时保留 2 天供你点击下载
+          name: multica-offline-package
+          path: multica-offline-package.tar.gz
+          retention-days: 1 # 在 GitHub 上临时保留 2 天供你点击下载
