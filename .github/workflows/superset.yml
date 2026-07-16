@@ -12,7 +12,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Setup Kubernetes Tools
         uses: yokawasa/action-setup-kube-tools@v0.14.0
         with:
@@ -22,28 +21,102 @@ jobs:
           helm: "latest"
           yq: "latest"
 
-      - name: Fetch Helm Chart and Extract Images
+      # ========== 新增：构建 Helm 依赖并打包 ==========
+      - name: Build Helm Dependencies and Package
         run: |
+          set -euo pipefail
+
           # 1. 添加并更新 repo
           helm repo add superset https://apache.github.io/superset
           helm repo update
 
-          # 2. 使用 yq 提取镜像，使用 grep -v 剔除 --- 和空行
+          # 2. 拉取 chart 源码到本地目录
+          echo "正在拉取 Superset Helm Chart 源码..."
+          helm pull superset/superset --untar --untardir ./superset-chart-src
+
+          # 找到解压后的 chart 目录（可能是 superset-chart-src/superset）
+          CHART_DIR=$(find ./superset-chart-src -maxdepth 1 -type d | tail -n 1)
+          echo "Chart 目录: $CHART_DIR"
+
+          # 3. 构建依赖
+          echo "正在执行 helm dependency build..."
+          helm dependency build "$CHART_DIR"
+
+          # 4. 验证 charts/ 和 Chart.lock 是否存在
+          if [ ! -d "$CHART_DIR/charts" ]; then
+            echo "Warning: charts/ 目录不存在或为空"
+            mkdir -p "$CHART_DIR/charts"
+          fi
+
+          if [ ! -f "$CHART_DIR/Chart.lock" ]; then
+            echo "Warning: Chart.lock 文件不存在"
+          fi
+
+          # 5. 单独打包 charts/ 和 Chart.lock
+          echo "正在打包 charts/ 和 Chart.lock..."
+          OUTPUT_NAME="superset-helm-deps.tar.gz"
+          tar -czf "$OUTPUT_NAME" \
+            -C "$CHART_DIR" \
+            charts/ \
+            Chart.lock
+
+          echo "========================================"
+          echo "  Helm 依赖包内容："
+          tar -tzf "$OUTPUT_NAME" | head -20
+          echo "  ... (共 $(tar -tzf "$OUTPUT_NAME" | wc -l) 个文件)"
+          echo "  依赖包大小: $(du -sh "$OUTPUT_NAME" | cut -f1)"
+          echo "========================================"
+
+      - name: Upload Helm Dependencies Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: superset-helm-deps
+          path: superset-helm-deps.tar.gz
+          retention-days: 1
+
+      # ========== 修改：提取镜像时额外添加 dockerize 镜像 ==========
+      - name: Fetch Helm Chart and Extract Images
+        run: |
+          set -euo pipefail
+
+          # repo 已在上一步添加，这里确保可用
+          helm repo add superset https://apache.github.io/superset 2>/dev/null || true
+          helm repo update
+
+          # 使用 yq 从 helm template 中提取镜像
           helm template my-superset superset/superset | \
             yq e '.. | select(has("image")) | .image | select(. != null)' - | \
             sort -u > images.txt
+
+          # 清理无效行
           sed -i '/---/d' images.txt
           sed -i '/^\s*$/d' images.txt
+
+          # 额外添加 apache/superset:dockerize 镜像
+          EXTRA_IMAGE="apache/superset:dockerize"
+          if ! grep -qxF "$EXTRA_IMAGE" images.txt; then
+            echo "$EXTRA_IMAGE" >> images.txt
+            echo "已额外添加镜像: $EXTRA_IMAGE"
+          else
+            echo "镜像 $EXTRA_IMAGE 已存在于列表中，跳过重复添加"
+          fi
+
+          # 重新排序去重
+          sort -u -o images.txt images.txt
 
           echo "========================================"
           echo "       FOUND IMAGES FOR SUPERSET        "
           echo "========================================"
           cat images.txt
           echo "========================================"
+          echo "共计 $(wc -l < images.txt) 个镜像"
+          echo "========================================"
 
       - name: Pull and Save Docker Images
         run: |
-          # 3. 将文件读取为 Bash 数组
+          set -euo pipefail
+
+          # 将文件读取为 Bash 数组
           mapfile -t IMAGES < images.txt
 
           # 如果没有找到任何镜像，直接退出
