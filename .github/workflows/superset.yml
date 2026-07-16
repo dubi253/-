@@ -24,7 +24,6 @@ jobs:
       # ========== 新增：构建 Helm 依赖并打包 ==========
       - name: Build Helm Dependencies and Package
         run: |
-          set -euo pipefail
 
           # 1. 添加并更新 repo
           helm repo add superset https://apache.github.io/superset
@@ -77,7 +76,6 @@ jobs:
       # ========== 修改：提取镜像时额外添加 dockerize 镜像 ==========
       - name: Fetch Helm Chart and Extract Images
         run: |
-          set -euo pipefail
 
           # repo 已在上一步添加，这里确保可用
           helm repo add superset https://apache.github.io/superset 2>/dev/null || true
@@ -114,7 +112,6 @@ jobs:
 
       - name: Pull and Save Docker Images
         run: |
-          set -euo pipefail
 
           # 将文件读取为 Bash 数组
           mapfile -t IMAGES < images.txt
