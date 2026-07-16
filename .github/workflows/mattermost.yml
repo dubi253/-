@@ -71,13 +71,22 @@ jobs:
           fi
 
           echo "正在提取 Team Edition 镜像，Mattermost tag 使用: ${APP_VER}"
-          helm template my-mm "$TEAM_CHART_DIR" --set image.tag="$APP_VER" | \
+          helm template my-mm "$TEAM_CHART_DIR" \
+            --set image.tag="$APP_VER" \
+            --set mysql.enabled=false \
+            --set externalDB.enabled=true \
+            --set externalDB.externalDriverType=postgres | \
             yq e '.. | select(has("image")) | .image' - | \
             grep -v '^null' | sort -u >> images_list.txt
+
+          # echo "添加 PostgreSQL 镜像: postgres:18"
+          # echo "postgres:18" >> images_list.txt
 
           # 去重并清理
           sort -u -o images_list.txt images_list.txt
           sed -i '/^$/d' images_list.txt
+          sed -i '/---/d' images.txt
+          sed -i '/^\s*$/d' images.txt
 
           echo "========================================"
           echo "       最终待拉取镜像列表"
