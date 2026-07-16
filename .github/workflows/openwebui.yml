@@ -1,0 +1,324 @@
+name: Package OpenWebUI Resources
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '0 0 * * 0' # 可选：每周自动运行一次
+
+jobs:
+  package-resources:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ========== 1. 设置 Kubernetes 工具 ==========
+      - name: Setup Kubernetes Tools
+        uses: yokawasa/action-setup-kube-tools@v0.14.0
+        with:
+          setup-tools: |
+            helm
+            yq
+          helm: "latest"
+          yq: "latest"
+
+      # ========== 2. 提取 Open WebUI 版本号 ==========
+      - name: Extract OpenWebUI Version from Helm
+        id: webui_vars
+        run: |
+          helm repo add open-webui https://open-webui.github.io/helm-charts
+          helm repo update
+          
+          # 从 Chart 中提取应用版本
+          WEBUI_VERSION=$(helm show chart open-webui/open-webui | yq e '.appVersion' -)
+          
+          if [ -z "$WEBUI_VERSION" ] || [ "$WEBUI_VERSION" = "null" ]; then
+            echo "Error: 无法从 Helm Chart 提取版本号"
+            exit 1
+          fi
+
+          echo "检测到的 Open WebUI 版本为: $WEBUI_VERSION"
+          echo "version=$WEBUI_VERSION" >> $GITHUB_OUTPUT
+          echo "target_image=ghcr.io/open-webui/open-webui:$WEBUI_VERSION" >> $GITHUB_OUTPUT
+
+      # ========== 3. 提取镜像列表 ==========
+      - name: Extract Images List
+        id: list_images
+        run: |
+          helm repo add open-webui https://open-webui.github.io/helm-charts 2>/dev/null || true
+          helm repo update
+
+          # 从模板提取所有镜像引用
+          helm template my-openwebui open-webui/open-webui | \
+            yq e '.. | select(has("image")) | .image | select(. != null)' - | \
+            sort -u > images.txt
+
+          # 清理文件中的空行和分隔符
+          sed -i '/---/d' images.txt
+          sed -i '/^\s*$/d' images.txt
+
+          # 添加已知但可能不在模板中的依赖镜像（如果需要）
+          # 例如，如果使用 Redis 或 PostgreSQL 作为外部服务，可能需要添加
+          # if ! grep -qxF "redis:alpine" images.txt; then
+          #   echo "redis:alpine" >> images.txt
+          # fi
+          # if ! grep -qxF "postgres:15-alpine" images.txt; then
+          #   echo "postgres:15-alpine" >> images.txt
+          # fi
+
+          echo "========================================"
+          echo "       待拉取镜像列表"
+          echo "========================================"
+          cat images.txt
+          echo "========================================"
+          echo "共计 $(wc -l < images.txt) 个镜像"
+          echo "========================================"
+
+      # ========== 4. 拉取所有官方镜像 ==========
+      - name: Pull All Official Images
+        run: |
+          mapfile -t IMAGES < images.txt
+          
+          if [ ${#IMAGES[@]} -eq 0 ]; then
+            echo "Error: 未找到任何镜像！"
+            exit 1
+          fi
+
+          echo "=========================================="
+          echo "正在拉取所有官方镜像 (共 ${#IMAGES[@]} 个)..."
+          echo "=========================================="
+          for img in "${IMAGES[@]}"; do
+            echo "正在下载: $img ..."
+            docker pull "$img"
+          done
+          echo "所有官方镜像拉取完成。"
+
+      # ========== 5. 可选：构建定制镜像（如果需要） ==========
+      # 如果需要修改 Open WebUI 镜像（例如添加依赖或配置），可以在此步骤添加
+      # - name: Build Custom OpenWebUI Image
+      #   run: |
+      #     WEBUI_VERSION="${{ steps.webui_vars.outputs.version }}"
+      #     TARGET_IMAGE="${{ steps.webui_vars.outputs.target_image }}"
+      #
+      #     echo "=========================================="
+      #     echo "正在基于本地官方镜像构建定制版本..."
+      #     echo "目标标签: $TARGET_IMAGE"
+      #     echo "========================================="
+      #
+      #     # 示例：添加 Python 依赖
+      #     cat > Dockerfile.openwebui-custom <<EOF
+      #     FROM ${TARGET_IMAGE}
+      #     USER root
+      #     RUN apt-get update && apt-get install -y --no-install-recommends \
+      #         default-libmysqlclient-dev pkg-config gcc g++ \
+      #         && rm -rf /var/lib/apt/lists/*
+      #     USER openwebui
+      #     RUN pip install --no-cache-dir pydoris mysqlclient
+      #     EOF
+      #
+      #     docker build -f Dockerfile.openwebui-custom -t "$TARGET_IMAGE" .
+      #     echo "定制镜像构建完成，已覆盖原镜像标签: $TARGET_IMAGE"
+
+      # ========== 6. 打包完整的 Helm Chart ==========
+      - name: Package Full Helm Chart
+        run: |
+          helm repo add open-webui https://open-webui.github.io/helm-charts
+          helm repo update
+          
+          echo "正在拉取 Chart 源码..."
+          helm pull open-webui/open-webui --untar --untardir ./openwebui-chart-src
+          
+          CHART_DIR=$(find ./openwebui-chart-src -maxdepth 1 -type d | tail -n 1)
+          echo "Chart 目录: $CHART_DIR"
+
+          echo "正在构建依赖..."
+          helm dependency build "$CHART_DIR"
+
+          echo "正在打包完整的 Helm Chart..."
+          OUTPUT_NAME="openwebui-helm-full.tar.gz"
+          tar -czf "$OUTPUT_NAME" -C "$CHART_DIR" .
+
+          echo "========================================"
+          echo "  Helm 完整包大小: $(du -sh "$OUTPUT_NAME" | cut -f1)"
+          echo "========================================"
+
+      # ========== 7. 上传 Helm Artifact ==========
+      - name: Upload Helm Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: openwebui-helm-full
+          path: openwebui-helm-full.tar.gz
+          retention-days: 1
+
+      # ========== 8. 保存所有镜像（包含可能已修改的） ==========
+      - name: Save All Images
+        run: |
+          mapfile -t IMAGES < images.txt
+          
+          echo "=========================================="
+          echo "正在保存所有镜像 (含定制版 Open WebUI)..."
+          echo "=========================================="
+          OUTPUT_NAME="openwebui-images.tar.gz"
+          
+          # docker save 会读取当前本地镜像列表
+          # 如果在步骤 5 中构建了定制镜像，这里保存的就是定制后的版本
+          docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
+
+          echo "=========================================="
+          echo "打包成功！最终大小："
+          du -sh "$OUTPUT_NAME"
+          echo "========================================="
+
+      # ========== 9. 上传镜像 Artifact ==========
+      - name: Upload Images Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: openwebui-offline-images
+          path: openwebui-images.tar.gz
+          retention-days: 1
+
+      # ========== 10. 生成部署说明（可选但推荐）==========
+      - name: Generate Deployment Instructions
+        run: |
+          cat > deployment-instructions.md <<EOF
+          # Open WebUI 离线部署指南
+
+          ## 前提条件
+          - 已有可访问的 Kubernetes 集群
+          - 已安装 kubectl 和 helm 客户端
+          - 有足够的权限来部署应用和创建命名空间
+
+          ## 部署步骤
+
+          1. **加载镜像到目标集群**
+             \`bash
+             # 将 openwebui-images.tar.gz 传输到目标集群的每个节点
+             # 在每个节点上执行：
+             gunzip -c openwebui-images.tar.gz | docker load
+             \`
+
+          2. **解压并安装 Helm Chart**
+             \`bash
+             # 解压 Helm Chart
+             tar -xzf openwebui-helm-full.tar.gz
+             cd open-webui
+             
+             # 安装 Open WebUI
+             # 注意：根据实际需求修改 values.yaml 文件
+             helm install openwebui . --namespace openwebui --create-namespace
+             \`
+
+          3. **验证部署**
+             \`bash
+             kubectl get pods -n openwebui
+             kubectl get svc -n openwebui
+             \`
+
+          4. **访问 Open WebUI**
+             - 获取服务端点：
+               \`bash
+               kubectl get svc openwebui -n openwebui
+               \`
+             - 通过 LoadBalancer 或 NodePort 方式访问服务
+
+          ## 重要配置说明
+
+          1. **持久化存储**
+             - 默认情况下，Open WebUI 使用 EmptyDir，数据会在 Pod 重启后丢失
+             - 建议配置 PVC 以持久化数据：
+               \`yaml
+               # values.yaml
+               persistence:
+                 enabled: true
+                 storageClass: "your-storage-class"
+                 size: 10Gi
+               \`
+
+          2. **向量数据库**
+             - **重要**：默认的 ChromaDB 使用本地 SQLite，不适合多副本部署
+             - 对于生产环境或多副本，请配置外部向量数据库：
+               \`yaml
+               # values.yaml
+               env:
+                 - name: VECTOR_DB
+                   value: "qdrant"  # 或 "milvus", "pgvector"
+                 - name: QDRANT_HOST
+                   value: "qdrant-service"
+                 - name: QDRANT_PORT
+                   value: "6333"
+               \`
+
+          3. **Redis 配置（多副本必需）**
+             - 如果部署多副本，需要配置 Redis：
+               \`yaml
+               # values.yaml
+               redis:
+                 enabled: true
+                 # 或使用外部 Redis
+                 # externalRedis:
+                 #   host: "your-redis-host"
+                 #   port: 6379
+                 #   password: "your-redis-password"
+               \`
+
+          4. **资源限制**
+             - 根据实际需求设置资源限制：
+               \`yaml
+               # values.yaml
+               resources:
+                 limits:
+                   cpu: "2"
+                   memory: "4Gi"
+                 requests:
+                   cpu: "1"
+                   memory: "2Gi"
+               \`
+
+          ## 升级注意事项
+
+          **关键**：在升级前，请务必执行以下操作：
+          1. 将副本数缩减到 1：
+             \`bash
+             kubectl scale deployment openwebui -n openwebui --replicas=1
+             \`
+          2. 等待 Pod 就绪
+          3. 执行升级：
+             \`bash
+             helm upgrade openwebui . --namespace openwebui
+             \`
+          4. 等待升级完成，数据库迁移执行完毕
+          5. 再将副本数恢复到原来的数量
+
+          不遵守此流程可能导致数据库损坏！
+
+          ## 故障排除
+
+          1. **Pod 无法启动**
+             - 检查日志：\`kubectl logs -n openwebui <pod-name>\`
+             - 检查事件：\`kubectl describe pod -n openwebui <pod-name>\`
+
+          2. **数据库连接问题**
+             - 检查数据库服务是否正常运行
+             - 验证连接字符串是否正确
+
+          3. **向量数据库问题**
+             - 确认向量数据库服务是否正常运行
+             - 检查环境变量配置是否正确
+
+          ## 资源清理
+          \`bash
+          # 卸载 Open WebUI
+          helm uninstall openwebui -n openwebui
+          
+          # 删除命名空间
+          kubectl delete namespace openwebui
+          \`
+          EOF
+
+          echo "部署指南已生成：deployment-instructions.md"
+
+      # ========== 11. 上传部署指南 ==========
+      - name: Upload Deployment Instructions
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: openwebui-deployment-guide
+          path: deployment-instructions.md
+          retention-days: 1
