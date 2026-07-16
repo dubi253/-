@@ -11,14 +11,6 @@ on:
         description: "Mattermost Operator版本 (留空则使用最新 Chart)"
         required: false
         default: ""
-      include_postgres:
-        description: "是否包含PostgreSQL镜像"
-        required: true
-        default: "true"
-      include_redis:
-        description: "是否包含Redis镜像"
-        required: true
-        default: "true"
 
 jobs:
   package-resources:
@@ -36,87 +28,52 @@ jobs:
           yq: "latest"
 
       # ========== 2. 准备 Helm Chart ==========
-      - name: Pull and Prepare Operator Chart
+      - name: Pull and Prepare Charts
         id: prep_chart
         run: |
-          # 确定使用的 Operator Chart 版本
-          OPER_VER="${{ inputs.operator_version }}"
           helm repo add mattermost https://helm.mattermost.com
-          if [ -z "$OPER_VER" ]; then
-            echo "未指定版本，将使用最新版本的 Chart..."
-            # 不传 --version 即为拉取最新
-            helm pull mattermost/mattermost-operator --untar --untardir ./charts
+          OPERATOR_VER="${{ inputs.operator_version }}"
+          if [ -z "$OPERATOR_VER" ]; then
+            echo "拉取最新的 mattermost-operator Chart..."
+            helm pull mattermost/mattermost-operator --untar --untardir ./charts/operator
           else
-            echo "使用指定的 Chart 版本: $OPER_VER"
-            helm pull mattermost/mattermost-operator --version "$OPER_VER" --untar --untardir ./charts
+            echo "拉取指定版本的 mattermost-operator Chart: $OPERATOR_VER"
+            helm pull mattermost/mattermost-operator --version "$OPERATOR_VER" --untar --untardir ./charts/operator
           fi
 
+          echo "拉取 mattermost-team-edition Chart..."
+          helm pull mattermost/mattermost-team-edition --untar --untardir ./charts/team-edition
+
           # 找到解压后的目录
-          CHART_DIR=$(find ./charts -maxdepth 1 -type d -name "mattermost-operator*" | head -n 1)
-          echo "chart_dir=$CHART_DIR" >> $GITHUB_OUTPUT
-          echo "Chart 目录: $CHART_DIR"
+          OPERATOR_CHART_DIR=$(find ./charts/operator -maxdepth 1 -type d -name "mattermost-operator*" | head -n 1)
+          TEAM_CHART_DIR=$(find ./charts/team-edition -maxdepth 1 -type d -name "mattermost-team-edition*" | head -n 1)
+          echo "operator_chart_dir=$OPERATOR_CHART_DIR" >> $GITHUB_OUTPUT
+          echo "team_chart_dir=$TEAM_CHART_DIR" >> $GITHUB_OUTPUT
+          echo "Operator Chart 目录: $OPERATOR_CHART_DIR"
+          echo "Team Edition Chart 目录: $TEAM_CHART_DIR"
 
       # ========== 3. 动态提取镜像列表 (核心逻辑) ==========
       - name: Extract All Images List
         id: list_images
         run: |
-          CHART_DIR="${{ steps.prep_chart.outputs.chart_dir }}"
+          OPERATOR_CHART_DIR="${{ steps.prep_chart.outputs.operator_chart_dir }}"
+          TEAM_CHART_DIR="${{ steps.prep_chart.outputs.team_chart_dir }}"
           > images_list.txt
 
-          # 3.1 提取 Operator 自身镜像
-          # 渲染模板，提取 .image 字段
           echo "正在提取 Operator 镜像..."
-          helm template my-op "$CHART_DIR" | \
+          helm template my-op "$OPERATOR_CHART_DIR" | \
             yq e '.. | select(has("image")) | .image' - | \
             grep -v '^null' | sort -u >> images_list.txt
 
-          # 3.2 处理 Mattermost 应用镜像
-          # 如果用户指定了版本则使用版本，否则强制使用 latest
-          APP_REPO=$(yq e '.image.repository' "$CHART_DIR/values.yaml")
           APP_VER="${{ inputs.mattermost_version }}"
-
           if [ -z "$APP_VER" ]; then
             APP_VER="latest"
           fi
 
-          echo "添加 Mattermost 镜像: ${APP_REPO}:${APP_VER}"
-          echo "${APP_REPO}:${APP_VER}" >> images_list.txt
-
-          # 3.3 处理 PostgreSQL (从 Chart 读取默认配置)
-          if [ "${{ inputs.include_postgres }}" == "true" ]; then
-            # 尝试从 values.yaml 获取配置，如果 Chart 内置了 postgresql 依赖
-            PG_REPO=$(yq e '.postgresql.image.repository' "$CHART_DIR/values.yaml")
-            PG_TAG=$(yq e '.postgresql.image.tag' "$CHART_DIR/values.yaml")
-            
-            # 如果 Chart values 里没有（可能使用了外部依赖），给一个通用的 latest
-            if [ "$PG_REPO" == "null" ] || [ -z "$PG_REPO" ]; then
-              echo "Chart 中未找到 Postgres 配置，使用默认 latest..."
-              echo "postgres:latest" >> images_list.txt
-            else
-              # 如果配置里也是 latest 或者具体数字，照用
-              echo "添加 PostgreSQL 镜像: ${PG_REPO}:${PG_TAG}"
-              echo "${PG_REPO}:${PG_TAG}" >> images_list.txt
-            fi
-          fi
-
-          # 3.4 处理 Redis (从 Chart 读取默认配置)
-          if [ "${{ inputs.include_redis }}" == "true" ]; then
-            REDIS_REPO=$(yq e '.redis.image.repository' "$CHART_DIR/values.yaml")
-            REDIS_TAG=$(yq e '.redis.image.tag' "$CHART_DIR/values.yaml")
-
-            if [ "$REDIS_REPO" == "null" ] || [ -z "$REDIS_REPO" ]; then
-               echo "Chart 中未找到 Redis 配置，使用默认 latest..."
-               echo "redis:latest" >> images_list.txt
-            else
-               echo "添加 Redis 镜像: ${REDIS_REPO}:${REDIS_TAG}"
-               echo "${REDIS_REPO}:${REDIS_TAG}" >> images_list.txt
-            fi
-          fi
-
-          # 3.5 处理 Nginx Ingress Controller (强制 latest)
-          # k8s.gcr.io 已废弃，这里使用官方镜像库
-          echo "registry.k8s.io/ingress-nginx/controller:latest" >> images_list.txt
-          echo "registry.k8s.io/ingress-nginx/kube-webhook-certgen:latest" >> images_list.txt
+          echo "正在提取 Team Edition 镜像，Mattermost tag 使用: ${APP_VER}"
+          helm template my-mm "$TEAM_CHART_DIR" --set image.tag="$APP_VER" | \
+            yq e '.. | select(has("image")) | .image' - | \
+            grep -v '^null' | sort -u >> images_list.txt
 
           # 去重并清理
           sort -u -o images_list.txt images_list.txt
@@ -147,7 +104,7 @@ jobs:
       # ========== 5. 打包 Helm Chart ==========
       - name: Package Helm Chart
         run: |
-          CHART_DIR="${{ steps.prep_chart.outputs.chart_dir }}"
+          CHART_DIR="${{ steps.prep_chart.outputs.operator_chart_dir }}"
           echo "正在构建依赖..."
           # 尝试构建依赖（有些 chart 依赖其他 chart）
           helm dependency build "$CHART_DIR" 2>/dev/null || echo "无依赖或依赖已存在"
