@@ -10,6 +10,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Disk Space Reclaimer
+        uses: insightsengineering/disk-space-reclaimer@v1.1.2
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tools-cache: false
+
       # ========== 1. 设置 Kubernetes 工具 ==========
       - name: Setup Kubernetes Tools
         uses: yokawasa/action-setup-kube-tools@v0.14.0
@@ -26,10 +33,10 @@ jobs:
         run: |
           helm repo add open-webui https://open-webui.github.io/helm-charts
           helm repo update
-          
+
           # 从 Chart 中提取应用版本
           WEBUI_VERSION=$(helm show chart open-webui/open-webui | yq e '.appVersion' -)
-          
+
           if [ -z "$WEBUI_VERSION" ] || [ "$WEBUI_VERSION" = "null" ]; then
             echo "Error: 无法从 Helm Chart 提取版本号"
             exit 1
@@ -39,17 +46,16 @@ jobs:
           echo "version=$WEBUI_VERSION" >> $GITHUB_OUTPUT
           echo "target_image=ghcr.io/open-webui/open-webui:$WEBUI_VERSION" >> $GITHUB_OUTPUT
 
-      # ========== 3. 预先添加 Chart 依赖仓库 ========== 
+      # ========== 3. 预先添加 Chart 依赖仓库 ==========
       - name: Add Helm Dependency Repositories
         run: |
           helm repo add open-webui https://open-webui.github.io/helm-charts 2>/dev/null || true
-          helm repo add ollama https://otwld.github.io/ollama-helm/ 2>/dev/null || true
           helm repo add pipelines https://helm.openwebui.com/ 2>/dev/null || true
           helm repo add terminals https://helm.openwebui.com/ 2>/dev/null || true
           helm repo add tika https://apache.jfrog.io/artifactory/tika 2>/dev/null || true
           helm repo update
 
-      # ========== 4. 提取镜像列表 ========== 
+      # ========== 4. 提取镜像列表 ==========
       - name: Extract Images List
         id: list_images
         run: |
@@ -60,6 +66,10 @@ jobs:
           helm template my-openwebui open-webui/open-webui | \
             yq e '.. | select(has("image")) | .image | select(. != null)' - | \
             sort -u > images.txt
+
+          # 直接移除包含 ollama 的镜像行
+          grep -v 'ollama' images.txt > images.txt.tmp
+          mv images.txt.tmp images.txt
 
           # 清理文件中的空行和分隔符
           sed -i '/---/d' images.txt
@@ -86,7 +96,7 @@ jobs:
       - name: Pull All Official Images
         run: |
           mapfile -t IMAGES < images.txt
-          
+
           if [ ${#IMAGES[@]} -eq 0 ]; then
             echo "Error: 未找到任何镜像！"
             exit 1
@@ -132,14 +142,16 @@ jobs:
         run: |
           helm repo add open-webui https://open-webui.github.io/helm-charts
           helm repo update
-          
+
           echo "正在拉取 Chart 源码..."
           helm pull open-webui/open-webui --untar --untardir ./openwebui-chart-src
-          
+
           CHART_DIR=$(find ./openwebui-chart-src -maxdepth 1 -type d | tail -n 1)
           echo "Chart 目录: $CHART_DIR"
 
           echo "正在构建依赖..."
+          yq -i 'del(.dependencies[] | select(.name == "ollama"))' "$CHART_DIR/Chart.yaml"
+          rm -f "$CHART_DIR/Chart.lock"
           helm dependency build "$CHART_DIR"
 
           echo "正在打包完整的 Helm Chart..."
@@ -162,12 +174,12 @@ jobs:
       - name: Save All Images
         run: |
           mapfile -t IMAGES < images.txt
-          
+
           echo "=========================================="
           echo "正在保存所有镜像 (含定制版 Open WebUI)..."
           echo "=========================================="
           OUTPUT_NAME="openwebui-images.tar.gz"
-          
+
           # docker save 会读取当前本地镜像列表
           # 如果在步骤 5 中构建了定制镜像，这里保存的就是定制后的版本
           docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
@@ -317,7 +329,7 @@ jobs:
           \`bash
           # 卸载 Open WebUI
           helm uninstall openwebui -n openwebui
-          
+
           # 删除命名空间
           kubectl delete namespace openwebui
           \`
