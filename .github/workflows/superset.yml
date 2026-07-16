@@ -1,9 +1,7 @@
 name: Package Superset Images
 
 on:
-  # 允许手动触发
   workflow_dispatch:
-  # 如果需要定时运行，可以取消下面两行的注释（每周日午夜）
   # schedule:
   #   - cron: '0 0 * * 0'
 
@@ -21,123 +19,143 @@ jobs:
           helm: "latest"
           yq: "latest"
 
-      # ========== 新增：构建 Helm 依赖并打包 ==========
-      - name: Build Helm Dependencies and Package
+      # ========== 步骤 1：提取版本号 ==========
+      - name: Extract Superset Version from Helm
+        id: superset_vars
         run: |
-
-          # 1. 添加并更新 repo
           helm repo add superset https://apache.github.io/superset
           helm repo update
-
-          # 2. 拉取 chart 源码到本地目录
-          echo "正在拉取 Superset Helm Chart 源码..."
-          helm pull superset/superset --untar --untardir ./superset-chart-src
-
-          # 找到解压后的 chart 目录（可能是 superset-chart-src/superset）
-          CHART_DIR=$(find ./superset-chart-src -maxdepth 1 -type d | tail -n 1)
-          echo "Chart 目录: $CHART_DIR"
-
-          # 3. 构建依赖
-          echo "正在执行 helm dependency build..."
-          helm dependency build "$CHART_DIR"
-
-          # 4. 验证 charts/ 和 Chart.lock 是否存在
-          if [ ! -d "$CHART_DIR/charts" ]; then
-            echo "Warning: charts/ 目录不存在或为空"
-            mkdir -p "$CHART_DIR/charts"
+          
+          SUPERSET_VERSION=$(helm show chart superset/superset | yq e '.appVersion' -)
+          
+          if [ -z "$SUPERSET_VERSION" ] || [ "$SUPERSET_VERSION" = "null" ]; then
+            echo "Error: 无法从 Helm Chart 提取版本号"
+            exit 1
           fi
 
-          if [ ! -f "$CHART_DIR/Chart.lock" ]; then
-            echo "Warning: Chart.lock 文件不存在"
-          fi
+          echo "检测到的 Superset 版本为: $SUPERSET_VERSION"
+          echo "version=$SUPERSET_VERSION" >> $GITHUB_OUTPUT
+          echo "target_image=apache/superset:$SUPERSET_VERSION" >> $GITHUB_OUTPUT
 
-          # 5. 单独打包 charts/ 和 Chart.lock
-          echo "正在打包 charts/ 和 Chart.lock..."
-          OUTPUT_NAME="superset-helm-deps.tar.gz"
-          tar -czf "$OUTPUT_NAME" \
-            -C "$CHART_DIR" \
-            charts/ \
-            Chart.lock
-
-          echo "========================================"
-          echo "  Helm 依赖包内容："
-          tar -tzf "$OUTPUT_NAME" | head -20
-          echo "  ... (共 $(tar -tzf "$OUTPUT_NAME" | wc -l) 个文件)"
-          echo "  依赖包大小: $(du -sh "$OUTPUT_NAME" | cut -f1)"
-          echo "========================================"
-
-      - name: Upload Helm Dependencies Artifact
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: superset-helm-deps
-          path: superset-helm-deps.tar.gz
-          retention-days: 1
-
-      # ========== 修改：提取镜像时额外添加 dockerize 镜像 ==========
-      - name: Fetch Helm Chart and Extract Images
+      # ========== 步骤 2：提取镜像列表 ==========
+      - name: Extract Images List
+        id: list_images
         run: |
-
-          # repo 已在上一步添加，这里确保可用
           helm repo add superset https://apache.github.io/superset 2>/dev/null || true
           helm repo update
 
-          # 使用 yq 从 helm template 中提取镜像
+          # 从模板提取镜像
           helm template my-superset superset/superset | \
             yq e '.. | select(has("image")) | .image | select(. != null)' - | \
             sort -u > images.txt
 
-          # 清理无效行
           sed -i '/---/d' images.txt
           sed -i '/^\s*$/d' images.txt
 
-          # 额外添加 apache/superset:dockerize 镜像
-          EXTRA_IMAGE="apache/superset:dockerize"
-          if ! grep -qxF "$EXTRA_IMAGE" images.txt; then
-            echo "$EXTRA_IMAGE" >> images.txt
-            echo "已额外添加镜像: $EXTRA_IMAGE"
-          else
-            echo "镜像 $EXTRA_IMAGE 已存在于列表中，跳过重复添加"
+          # 添加 dockerize 镜像
+          if ! grep -qxF "apache/superset:dockerize" images.txt; then
+            echo "apache/superset:dockerize" >> images.txt
           fi
 
-          # 重新排序去重
-          sort -u -o images.txt images.txt
-
           echo "========================================"
-          echo "       FOUND IMAGES FOR SUPERSET        "
+          echo "       待拉取镜像列表"
           echo "========================================"
           cat images.txt
           echo "========================================"
           echo "共计 $(wc -l < images.txt) 个镜像"
           echo "========================================"
 
-      - name: Pull and Save Docker Images
+      # ========== 步骤 3：先拉取所有官方镜像 ==========
+      - name: Pull All Official Images
         run: |
-
-          # 将文件读取为 Bash 数组
           mapfile -t IMAGES < images.txt
-
-          # 如果没有找到任何镜像，直接退出
+          
           if [ ${#IMAGES[@]} -eq 0 ]; then
             echo "Error: No images found!"
             exit 1
           fi
 
           echo "=========================================="
-          echo "1. 开始拉取 Superset 镜像（共 ${#IMAGES[@]} 个）..."
+          echo "正在拉取所有官方镜像 (共 ${#IMAGES[@]} 个)..."
           echo "=========================================="
           for img in "${IMAGES[@]}"; do
             echo "正在下载: $img ..."
             docker pull "$img"
           done
+          echo "所有官方镜像拉取完成。"
+
+      # ========== 步骤 4：构建定制镜像 (基于已拉取的镜像) ==========
+      - name: Build Custom Superset Image
+        run: |
+          SUPERSET_VERSION="${{ steps.superset_vars.outputs.version }}"
+          TARGET_IMAGE="${{ steps.superset_vars.outputs.target_image }}"
 
           echo "=========================================="
-          echo "2. 正在合并打包并进行 gzip 极限压缩..."
+          echo "正在基于本地官方镜像构建定制版本..."
+          echo "目标标签: $TARGET_IMAGE"
+          echo "=========================================="
+
+          cat > Dockerfile.superset-custom <<EOF
+          # 引用本地已存在的官方镜像
+          FROM ${TARGET_IMAGE}
+
+          # 安装 pydoris 和 mysqlclient
+          # 官方镜像默认用户为 superset，且具备 pip 安装权限
+          RUN pip install --no-cache-dir pydoris mysqlclient
+          EOF
+
+          # 构建并覆盖标签
+          # 此时本地已有的 ${TARGET_IMAGE} 将被重新构建的新镜像覆盖
+          docker build -f Dockerfile.superset-custom -t "$TARGET_IMAGE" .
+          
+          echo "定制镜像构建完成，已覆盖原镜像标签: $TARGET_IMAGE"
+
+      # ========== 步骤 5：完整打包 Helm Chart ==========
+      - name: Package Full Helm Chart
+        run: |
+          helm repo add superset https://apache.github.io/superset
+          helm repo update
+          
+          echo "正在拉取 Chart 源码..."
+          helm pull superset/superset --untar --untardir ./superset-chart-src
+          
+          CHART_DIR=$(find ./superset-chart-src -maxdepth 1 -type d | tail -n 1)
+          echo "Chart 目录: $CHART_DIR"
+
+          echo "正在构建依赖..."
+          helm dependency build "$CHART_DIR"
+
+          echo "正在打包完整的 Helm Chart..."
+          OUTPUT_NAME="superset-helm-full.tar.gz"
+          tar -czf "$OUTPUT_NAME" -C "$CHART_DIR" .
+
+          echo "========================================"
+          echo "  Helm 完整包大小: $(du -sh "$OUTPUT_NAME" | cut -f1)"
+          echo "========================================"
+
+      - name: Upload Helm Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: superset-helm-full
+          path: superset-helm-full.tar.gz
+          retention-days: 1
+
+      # ========== 步骤 6：保存所有镜像 (包含已修改的) ==========
+      - name: Save All Images
+        run: |
+          mapfile -t IMAGES < images.txt
+          
+          echo "=========================================="
+          echo "正在保存所有镜像 (含定制版 Superset)..."
           echo "=========================================="
           OUTPUT_NAME="superset-images.tar.gz"
+          
+          # docker save 会读取当前本地镜像列表
+          # 这里的 apache/superset:xxx 已经是构建后的版本了
           docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
 
           echo "=========================================="
-          echo "打包成功！Superset 离线包最终大小为："
+          echo "打包成功！最终大小："
           du -sh "$OUTPUT_NAME"
           echo "=========================================="
 
