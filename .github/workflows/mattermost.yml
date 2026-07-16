@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       mattermost_version:
-        description: 'Mattermost版本 (留空则使用最新)'
+        description: 'Mattermost版本 (留空则使用 latest)'
         required: false
         default: ''
       operator_version:
-        description: 'Mattermost Operator版本 (留空则使用最新)'
+        description: 'Mattermost Operator版本 (留空则使用最新 Chart)'
         required: false
         default: ''
       include_postgres:
@@ -19,15 +19,13 @@ on:
         description: '是否包含Redis镜像'
         required: true
         default: 'true'
-  # schedule:
-  #   - cron: '0 0 * * 0' # 可选：每周自动运行
 
 jobs:
   package-resources:
     runs-on: ubuntu-latest
     
     steps:
-      # ========== 1. 设置 Kubernetes 工具 ==========
+      # ========== 1. 设置工具 ==========
       - name: Setup Kubernetes Tools
         uses: yokawasa/action-setup-kube-tools@v0.14.0
         with:
@@ -37,204 +35,155 @@ jobs:
           helm: "latest"
           yq: "latest"
 
-      # ========== 2. 提取 Mattermost 版本信息 ==========
-      - name: Extract Mattermost Version Info
-        id: version_vars
+      # ========== 2. 准备 Helm Chart ==========
+      - name: Pull and Prepare Operator Chart
+        id: prep_chart
         run: |
-          # 添加 Mattermost Helm 仓库
-          helm repo add mattermost https://helm.mattermost.com
-          helm repo update
-          
-          # 获取指定版本或最新版本
-          if [ -n "${{ inputs.mattermost_version }}" ]; then
-            MATTERMOST_VERSION="${{ inputs.mattermost_version }}"
-            echo "使用指定的 Mattermost 版本: $MATTERMOST_VERSION"
+          # 确定使用的 Operator Chart 版本
+          OPER_VER="${{ inputs.operator_version }}"
+          if [ -z "$OPER_VER" ]; then
+            echo "未指定版本，将使用最新版本的 Chart..."
+            # 不传 --version 即为拉取最新
+            helm pull mattermost/mattermost-operator --untar --untardir ./charts
           else
-            # 从 Chart 中提取最新应用版本
-            MATTERMOST_VERSION=$(helm show chart mattermost/mattermost-operator | yq e '.appVersion' -)
-            if [ -z "$MATTERMOST_VERSION" ] || [ "$MATTERMOST_VERSION" = "null" ]; then
-              echo "Error: 无法从 Helm Chart 提取版本号"
-              exit 1
-            fi
-            echo "检测到的最新 Mattermost 版本为: $MATTERMOST_VERSION"
+            echo "使用指定的 Chart 版本: $OPER_VER"
+            helm pull mattermost/mattermost-operator --version "$OPER_VER" --untar --untardir ./charts
           fi
-          
-          # 获取 Operator 版本
-          if [ -n "${{ inputs.operator_version }}" ]; then
-            OPERATOR_VERSION="${{ inputs.operator_version }}"
-            echo "使用指定的 Operator 版本: $OPERATOR_VERSION"
-          else
-            # 获取最新 Chart 版本
-            OPERATOR_VERSION=$(helm search repo mattermost/mattermost-operator --devel -o json | jq -r '.[0].version')
-            echo "检测到的最新 Operator 版本为: $OPERATOR_VERSION"
-          fi
-          
-          echo "version=$MATTERMOST_VERSION" >> $GITHUB_OUTPUT
-          echo "operator_version=$OPERATOR_VERSION" >> $GITHUB_OUTPUT
-          echo "operator_chart=mattermost/mattermost-operator" >> $GITHUB_OUTPUT
 
-      # ========== 3. 提取 Mattermost Operator 镜像列表 ==========
-      - name: Extract Operator Images List
-        id: list_operator_images
+          # 找到解压后的目录
+          CHART_DIR=$(find ./charts -maxdepth 1 -type d -name "mattermost-operator*" | head -n 1)
+          echo "chart_dir=$CHART_DIR" >> $GITHUB_OUTPUT
+          echo "Chart 目录: $CHART_DIR"
+
+      # ========== 3. 动态提取镜像列表 (核心逻辑) ==========
+      - name: Extract All Images List
+        id: list_images
         run: |
-          echo "正在提取 Mattermost Operator 所需镜像..."
+          CHART_DIR="${{ steps.prep_chart.outputs.chart_dir }}"
+          > images_list.txt
+
+          # 3.1 提取 Operator 自身镜像
+          # 渲染模板，提取 .image 字段
+          echo "正在提取 Operator 镜像..."
+          helm template my-op "$CHART_DIR" | \
+            yq e '.. | select(has("image")) | .image' - | \
+            grep -v '^null' | sort -u >> images_list.txt
+
+          # 3.2 处理 Mattermost 应用镜像
+          # 如果用户指定了版本则使用版本，否则强制使用 latest
+          APP_REPO=$(yq e '.image.repository' "$CHART_DIR/values.yaml")
+          APP_VER="${{ inputs.mattermost_version }}"
           
-          # 获取 Operator Chart
-          helm pull mattermost/mattermost-operator --version "${{ steps.version_vars.outputs.operator_version }}" --untar --untardir ./operator-chart-src
+          if [ -z "$APP_VER" ]; then
+            APP_VER="latest"
+          fi
           
-          CHART_DIR=$(find ./operator-chart-src -maxdepth 1 -type d -name "mattermost-operator*" | head -n 1)
-          echo "Operator Chart 目录: $CHART_DIR"
-          
-          # 从模板提取所有镜像引用
-          helm template my-operator mattermost/mattermost-operator --version "${{ steps.version_vars.outputs.operator_version }}" | \
-            yq e '.. | select(has("image")) | .image | select(. != null)' - | \
-            sort -u > operator_images.txt
-          
-          # 清理文件中的空行和分隔符
-          sed -i '/---/d' operator_images.txt
-          sed -i '/^\s*$/d' operator_images.txt
-          
-          # 添加 Mattermost 服务器镜像
-          MATTERMOST_VERSION="${{ steps.version_vars.outputs.version }}"
-          echo "mattermost/mattermost-enterprise-edition:$MATTERMOST_VERSION" >> operator_images.txt
-          echo "mattermost/mattermost-team-edition:$MATTERMOST_VERSION" >> operator_images.txt
-          
-          # 根据输入添加依赖镜像
+          echo "添加 Mattermost 镜像: ${APP_REPO}:${APP_VER}"
+          echo "${APP_REPO}:${APP_VER}" >> images_list.txt
+
+          # 3.3 处理 PostgreSQL (从 Chart 读取默认配置)
           if [ "${{ inputs.include_postgres }}" == "true" ]; then
-            echo "postgres:13-alpine" >> operator_images.txt
-            echo "postgres:14-alpine" >> operator_images.txt
-            echo "postgres:15-alpine" >> operator_images.txt
+            # 尝试从 values.yaml 获取配置，如果 Chart 内置了 postgresql 依赖
+            PG_REPO=$(yq e '.postgresql.image.repository' "$CHART_DIR/values.yaml")
+            PG_TAG=$(yq e '.postgresql.image.tag' "$CHART_DIR/values.yaml")
+            
+            # 如果 Chart values 里没有（可能使用了外部依赖），给一个通用的 latest
+            if [ "$PG_REPO" == "null" ] || [ -z "$PG_REPO" ]; then
+              echo "Chart 中未找到 Postgres 配置，使用默认 latest..."
+              echo "postgres:latest" >> images_list.txt
+            else
+              # 如果配置里也是 latest 或者具体数字，照用
+              echo "添加 PostgreSQL 镜像: ${PG_REPO}:${PG_TAG}"
+              echo "${PG_REPO}:${PG_TAG}" >> images_list.txt
+            fi
           fi
-          
+
+          # 3.4 处理 Redis (从 Chart 读取默认配置)
           if [ "${{ inputs.include_redis }}" == "true" ]; then
-            echo "redis:7-alpine" >> operator_images.txt
-            echo "redis:6-alpine" >> operator_images.txt
+            REDIS_REPO=$(yq e '.redis.image.repository' "$CHART_DIR/values.yaml")
+            REDIS_TAG=$(yq e '.redis.image.tag' "$CHART_DIR/values.yaml")
+
+            if [ "$REDIS_REPO" == "null" ] || [ -z "$REDIS_REPO" ]; then
+               echo "Chart 中未找到 Redis 配置，使用默认 latest..."
+               echo "redis:latest" >> images_list.txt
+            else
+               echo "添加 Redis 镜像: ${REDIS_REPO}:${REDIS_TAG}"
+               echo "${REDIS_REPO}:${REDIS_TAG}" >> images_list.txt
+            fi
           fi
-          
-          # 添加 Nginx Ingress Controller 镜像
-          echo "k8s.gcr.io/ingress-nginx/controller:v1.9.4" >> operator_images.txt
-          echo "k8s.gcr.io/ingress-nginx/kube-webhook-certgen:v1.9.4" >> operator_images.txt
-          
+
+          # 3.5 处理 Nginx Ingress Controller (强制 latest)
+          # k8s.gcr.io 已废弃，这里使用官方镜像库
+          echo "registry.k8s.io/ingress-nginx/controller:latest" >> images_list.txt
+          echo "registry.k8s.io/ingress-nginx/kube-webhook-certgen:latest" >> images_list.txt
+
+          # 去重并清理
+          sort -u -o images_list.txt images_list.txt
+          sed -i '/^$/d' images_list.txt
+
           echo "========================================"
-          echo "       Operator 待拉取镜像列表"
+          echo "       最终待拉取镜像列表"
           echo "========================================"
-          cat operator_images.txt
+          cat images_list.txt
           echo "========================================"
-          echo "共计 $(wc -l < operator_images.txt) 个镜像"
-          echo "========================================"
+          echo "共计 $(wc -l < images_list.txt) 个镜像"
 
       # ========== 4. 拉取所有官方镜像 ==========
       - name: Pull All Official Images
         run: |
-          mapfile -t IMAGES < operator_images.txt
-          
-          if [ ${#IMAGES[@]} -eq 0 ]; then
-            echo "Error: 未找到任何镜像！"
+          if [ ! -s images_list.txt ]; then
+            echo "Error: 镜像列表为空！"
             exit 1
           fi
 
-          echo "=========================================="
-          echo "正在拉取所有官方镜像 (共 ${#IMAGES[@]} 个)..."
-          echo "=========================================="
-          for img in "${IMAGES[@]}"; do
-            echo "正在下载: $img ..."
-            if ! docker pull "$img"; then
-              echo "警告: 镜像 $img 拉取失败，尝试使用替代方案..."
-              # 对于一些可能不存在的镜像，尝试其他版本
-              if [[ "$img" == *"postgres"* ]]; then
-                docker pull "postgres:14-alpine"
-              elif [[ "$img" == *"redis"* ]]; then
-                docker pull "redis:7-alpine"
-              elif [[ "$img" == *"ingress-nginx"* ]]; then
-                docker pull "k8s.gcr.io/ingress-nginx/controller:v1.10.0"
-              else
-                echo "错误: 镜像 $img 拉取失败，无法继续"
-                exit 1
-              fi
-            fi
-          done
-          echo "所有官方镜像拉取完成。"
+          # 读取列表并拉取
+          while IFS= read -r img; do
+            echo "正在拉取: $img"
+            docker pull "$img"
+          done < images_list.txt
+          echo "所有镜像拉取完成。"
 
-      # ========== 5. 构建定制镜像（可选） ==========
-      # 如果需要修改 Mattermost 镜像（例如添加依赖或配置），可以在此步骤添加
-      - name: Build Custom Mattermost Image (Optional)
-        if: github.event.inputs.build_custom_image == 'true'
+      # ========== 5. 打包 Helm Chart ==========
+      - name: Package Helm Chart
         run: |
-          MATTERMOST_VERSION="${{ steps.version_vars.outputs.version }}"
-          
-          echo "=========================================="
-          echo "正在构建定制 Mattermost 镜像..."
-          echo "========================================="
-
-          # 示例：添加额外的系统依赖
-          cat > Dockerfile.mattermost-custom <<EOF
-          FROM mattermost/mattermost-enterprise-edition:$MATTERMOST_VERSION
-          USER root
-          RUN apt-get update && apt-get install -y --no-install-recommends \
-              default-libmysqlclient-dev pkg-config gcc g++ \
-              && rm -rf /var/lib/apt/lists/*
-          USER mattermost
-          EOF
-
-          docker build -f Dockerfile.mattermost-custom -t "mattermost/mattermost-enterprise-edition:$MATTERMOST_VERSION-custom" .
-          echo "定制镜像构建完成: mattermost/mattermost-enterprise-edition:$MATTERMOST_VERSION-custom"
-
-      # ========== 6. 打包完整的 Helm Chart ==========
-      - name: Package Full Helm Chart
-        run: |
-          # 确保 Operator Chart 已下载
-          if [ ! -d "./operator-chart-src" ]; then
-            helm pull mattermost/mattermost-operator --version "${{ steps.version_vars.outputs.operator_version }}" --untar --untardir ./operator-chart-src
-          fi
-          
-          CHART_DIR=$(find ./operator-chart-src -maxdepth 1 -type d -name "mattermost-operator*" | head -n 1)
-          echo "Chart 目录: $CHART_DIR"
-
+          CHART_DIR="${{ steps.prep_chart.outputs.chart_dir }}"
           echo "正在构建依赖..."
+          # 尝试构建依赖（有些 chart 依赖其他 chart）
           helm dependency build "$CHART_DIR" 2>/dev/null || echo "无依赖或依赖已存在"
 
-          echo "正在打包完整的 Helm Chart..."
-          OUTPUT_NAME="mattermost-operator-helm-full.tar.gz"
-          tar -czf "$OUTPUT_NAME" -C "$CHART_DIR" .
+          echo "正在打包 Helm Chart..."
+          tar -czf mattermost-operator-helm.tar.gz -C "$CHART_DIR" .
+          echo "Helm Chart 打包完成。"
 
+      # ========== 6. 保存所有镜像 ==========
+      - name: Save All Images
+        run: |
+          # 再次确认要保存的镜像（基于实际拉取成功的）
+          # 这里简单处理，直接使用列表中的镜像名保存
+          # 注意：如果 pull 了 tag:latest，save 的也是 tag:latest
+          
+          # 将文件内容转换为数组参数
+          IMAGES=$(cat images_list.txt | tr '\n' ' ')
+          
+          echo "正在保存镜像到 mattermost-images.tar.gz ..."
+          docker save $IMAGES | gzip > mattermost-images.tar.gz
+          
           echo "========================================"
-          echo "  Helm 完整包大小: $(du -sh "$OUTPUT_NAME" | cut -f1)"
+          echo "打包成功！"
+          ls -lh mattermost-images.tar.gz
           echo "========================================"
 
-      # ========== 7. 上传 Helm Artifact ==========
+      # ========== 7. 上传 Artifacts ==========
       - name: Upload Helm Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: mattermost-operator-helm-full
-          path: mattermost-operator-helm-full.tar.gz
+          name: mattermost-helm-chart
+          path: mattermost-operator-helm.tar.gz
           retention-days: 1
 
-      # ========== 8. 保存所有镜像 ==========
-      - name: Save All Images
-        run: |
-          # 重新获取镜像列表，可能因拉取失败而有所变化
-          docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "(mattermost|postgres|redis|ingress-nginx)" | sort -u > final_images.txt
-          
-          mapfile -t IMAGES < final_images.txt
-          
-          echo "=========================================="
-          echo "正在保存所有镜像 (共 ${#IMAGES[@]} 个)..."
-          echo "=========================================="
-          OUTPUT_NAME="mattermost-images.tar.gz"
-          
-          # 保存镜像
-          docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
-
-          echo "=========================================="
-          echo "打包成功！最终大小："
-          du -sh "$OUTPUT_NAME"
-          echo "========================================="
-
-      # ========== 9. 上传镜像 Artifact ==========
       - name: Upload Images Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: mattermost-offline-images
+          name: mattermost-images
           path: mattermost-images.tar.gz
           retention-days: 1
-
