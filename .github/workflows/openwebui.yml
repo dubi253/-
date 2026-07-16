@@ -39,7 +39,17 @@ jobs:
           echo "version=$WEBUI_VERSION" >> $GITHUB_OUTPUT
           echo "target_image=ghcr.io/open-webui/open-webui:$WEBUI_VERSION" >> $GITHUB_OUTPUT
 
-      # ========== 3. 提取镜像列表 ==========
+      # ========== 3. 预先添加 Chart 依赖仓库 ========== 
+      - name: Add Helm Dependency Repositories
+        run: |
+          helm repo add open-webui https://open-webui.github.io/helm-charts 2>/dev/null || true
+          helm repo add ollama https://otwld.github.io/ollama-helm/ 2>/dev/null || true
+          helm repo add pipelines https://helm.openwebui.com/ 2>/dev/null || true
+          helm repo add terminals https://helm.openwebui.com/ 2>/dev/null || true
+          helm repo add tika https://apache.jfrog.io/artifactory/tika 2>/dev/null || true
+          helm repo update
+
+      # ========== 4. 提取镜像列表 ========== 
       - name: Extract Images List
         id: list_images
         run: |
