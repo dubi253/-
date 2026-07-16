@@ -99,13 +99,30 @@ jobs:
           # 引用本地已存在的官方镜像
           FROM ${TARGET_IMAGE}
 
-          # 安装 pydoris 和 mysqlclient
-          # 官方镜像默认用户为 superset，且具备 pip 安装权限
+          # 1. 切换到 root 用户以安装系统级依赖
+          USER root
+
+          # 2. 安装构建 mysqlclient 所需的系统库和编译工具
+          # default-libmysqlclient-dev: 包含 MySQL 头文件和库
+          # pkg-config: 辅助 mysqlclient 查找库路径
+          # gcc/g++: 编译器
+          RUN apt-get update && \
+              apt-get install -y --no-install-recommends \
+                  default-libmysqlclient-dev \
+                  pkg-config \
+                  gcc \
+                  g++ \
+              && rm -rf /var/lib/apt/lists/*
+
+          # 3. 切换回 superset 用户进行 pip 安装
+          # 虽然 root 也可以 pip install，但为了保持环境一致性和安全性，建议切回
+          USER superset
+
+          # 4. 安装 Python 依赖
           RUN pip install --no-cache-dir pydoris mysqlclient
           EOF
 
           # 构建并覆盖标签
-          # 此时本地已有的 ${TARGET_IMAGE} 将被重新构建的新镜像覆盖
           docker build -f Dockerfile.superset-custom -t "$TARGET_IMAGE" .
           
           echo "定制镜像构建完成，已覆盖原镜像标签: $TARGET_IMAGE"
