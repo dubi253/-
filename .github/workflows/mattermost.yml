@@ -85,8 +85,8 @@ jobs:
           # 去重并清理
           sort -u -o images_list.txt images_list.txt
           sed -i '/^$/d' images_list.txt
-          sed -i '/---/d' images.txt
-          sed -i '/^\s*$/d' images.txt
+          sed -i '/---/d' images_list.txt
+          sed -i '/^\s*$/d' images_list.txt
 
           echo "========================================"
           echo "       最终待拉取镜像列表"
