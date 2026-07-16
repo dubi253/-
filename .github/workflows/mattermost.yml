@@ -4,26 +4,26 @@ on:
   workflow_dispatch:
     inputs:
       mattermost_version:
-        description: 'Mattermost版本 (留空则使用 latest)'
+        description: "Mattermost版本 (留空则使用 latest)"
         required: false
-        default: ''
+        default: ""
       operator_version:
-        description: 'Mattermost Operator版本 (留空则使用最新 Chart)'
+        description: "Mattermost Operator版本 (留空则使用最新 Chart)"
         required: false
-        default: ''
+        default: ""
       include_postgres:
-        description: '是否包含PostgreSQL镜像'
+        description: "是否包含PostgreSQL镜像"
         required: true
-        default: 'true'
+        default: "true"
       include_redis:
-        description: '是否包含Redis镜像'
+        description: "是否包含Redis镜像"
         required: true
-        default: 'true'
+        default: "true"
 
 jobs:
   package-resources:
     runs-on: ubuntu-latest
-    
+
     steps:
       # ========== 1. 设置工具 ==========
       - name: Setup Kubernetes Tools
@@ -41,6 +41,7 @@ jobs:
         run: |
           # 确定使用的 Operator Chart 版本
           OPER_VER="${{ inputs.operator_version }}"
+          helm repo add mattermost https://helm.mattermost.com
           if [ -z "$OPER_VER" ]; then
             echo "未指定版本，将使用最新版本的 Chart..."
             # 不传 --version 即为拉取最新
@@ -73,11 +74,11 @@ jobs:
           # 如果用户指定了版本则使用版本，否则强制使用 latest
           APP_REPO=$(yq e '.image.repository' "$CHART_DIR/values.yaml")
           APP_VER="${{ inputs.mattermost_version }}"
-          
+
           if [ -z "$APP_VER" ]; then
             APP_VER="latest"
           fi
-          
+
           echo "添加 Mattermost 镜像: ${APP_REPO}:${APP_VER}"
           echo "${APP_REPO}:${APP_VER}" >> images_list.txt
 
@@ -161,13 +162,13 @@ jobs:
           # 再次确认要保存的镜像（基于实际拉取成功的）
           # 这里简单处理，直接使用列表中的镜像名保存
           # 注意：如果 pull 了 tag:latest，save 的也是 tag:latest
-          
+
           # 将文件内容转换为数组参数
           IMAGES=$(cat images_list.txt | tr '\n' ' ')
-          
+
           echo "正在保存镜像到 mattermost-images.tar.gz ..."
           docker save $IMAGES | gzip > mattermost-images.tar.gz
-          
+
           echo "========================================"
           echo "打包成功！"
           ls -lh mattermost-images.tar.gz
