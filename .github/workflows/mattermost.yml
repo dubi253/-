@@ -79,8 +79,8 @@ jobs:
             yq e '.. | select(has("image")) | .image' - | \
             grep -v '^null' | sort -u >> images_list.txt
 
-          # echo "添加 PostgreSQL 镜像: postgres:18"
-          # echo "postgres:18" >> images_list.txt
+          echo "添加 PostgreSQL 镜像: postgres:18"
+          echo "postgres:18" >> images_list.txt
 
           # 去重并清理
           sort -u -o images_list.txt images_list.txt
