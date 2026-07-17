@@ -123,7 +123,7 @@ jobs:
           USER superset
 
           # 4. 安装 Python 依赖
-          RUN pip install --no-cache-dir pydoris mysqlclient
+          RUN pip install --no-cache-dir pydoris mysqlclient psycopg2 psycopg2-binary
           EOF
 
           # 构建并覆盖标签
