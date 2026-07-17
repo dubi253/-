@@ -1,0 +1,173 @@
+name: Package Ingress NGINX Resources
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package-resources:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ========== 1. 设置工具 ==========
+      - name: Setup Kubernetes Tools
+        uses: yokawasa/action-setup-kube-tools@v0.14.0
+        with:
+          setup-tools: |
+            helm
+            yq
+          helm: "latest"
+          yq: "latest"
+
+      # ========== 2. 拉取最新 Helm Chart ==========
+      - name: Pull Latest Ingress NGINX Chart
+        id: prep_chart
+        run: |
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+
+          echo "拉取最新的 ingress-nginx Chart..."
+          mkdir -p ./charts
+          helm pull ingress-nginx/ingress-nginx \
+            --untar \
+            --untardir ./charts \
+            --dependency-update
+
+          CHART_DIR=$(find ./charts -maxdepth 1 -type d -name "ingress-nginx*" | head -n 1)
+          echo "chart_dir=$CHART_DIR" >> $GITHUB_OUTPUT
+
+          CHART_VERSION=$(yq '.version' "$CHART_DIR/Chart.yaml")
+          APP_VERSION=$(yq '.appVersion' "$CHART_DIR/Chart.yaml")
+          echo "chart_version=$CHART_VERSION" >> $GITHUB_OUTPUT
+          echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
+
+          echo "✅ Chart Version: $CHART_VERSION"
+          echo "✅ App Version:  $APP_VERSION"
+          echo "✅ Chart Dir:     $CHART_DIR"
+
+      # ========== 3. 渲染并提取所有镜像 ==========
+      - name: Extract All Images List
+        id: list_images
+        run: |
+          CHART_DIR="${{ steps.prep_chart.outputs.chart_dir }}"
+          > images_list.txt
+
+          echo "正在渲染 Helm Template (含 CRD)..."
+          helm template ingress-nginx "$CHART_DIR" \
+            --namespace ingress-nginx \
+            --include-crds \
+            > rendered-all.yaml
+
+          echo "正在提取所有容器镜像 (containers + initContainers)..."
+          yq eval-all '
+            .. | select(has("image")) | .image
+          ' rendered-all.yaml | grep -v '^null$' >> images_list.txt
+
+          echo "正在补充提取 values 中可能遗漏的镜像引用..."
+          # Ingress NGINX 有些镜像在 values 中以非标准结构定义
+          yq eval-all '
+            .. | select(tag == "!!map" and has("repository") and has("tag"))
+
+            | .repository + ":" + (.tag | tostring)
+          ' "$CHART_DIR/values.yaml" | grep -v '^null$' >> images_list.txt
+
+          # 去重并清理
+          sort -u -o images_list.txt images_list.txt
+          sed -i '/^$/d; /^---$/d; /^\s*$/d; /^null$/d' images_list.txt
+
+          echo "========================================"
+          echo "       最终待拉取镜像列表"
+          echo "========================================"
+          cat images_list.txt
+          echo "========================================"
+          IMAGE_COUNT=$(wc -l < images_list.txt)
+          echo "共计 ${IMAGE_COUNT} 个镜像"
+          echo "image_count=$IMAGE_COUNT" >> $GITHUB_OUTPUT
+
+      # ========== 4. 拉取所有镜像 ==========
+      - name: Pull All Images
+        run: |
+          if [ ! -s images_list.txt ]; then
+            echo "❌ Error: 镜像列表为空！"
+            exit 1
+          fi
+
+          FAILED=0
+          while IFS= read -r img; do
+            echo "正在拉取: $img"
+            if ! docker pull "$img"; then
+              echo "⚠️ 拉取失败: $img"
+              FAILED=$((FAILED + 1))
+            fi
+          done < images_list.txt
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "⚠️ 有 ${FAILED} 个镜像拉取失败，请检查日志"
+          fi
+          echo "✅ 镜像拉取流程完成"
+
+      # ========== 5. 打包 Helm Chart ==========
+      - name: Package Helm Chart
+        run: |
+          CHART_DIR="${{ steps.prep_chart.outputs.chart_dir }}"
+          CHART_VERSION="${{ steps.prep_chart.outputs.chart_version }}"
+
+          echo "正在构建依赖..."
+          helm dependency build "$CHART_DIR" 2>/dev/null || echo "无额外依赖或依赖已存在"
+
+          echo "正在打包 Helm Chart..."
+          tar -czf "ingress-nginx-chart-${CHART_VERSION}.tar.gz" -C "$CHART_DIR" .
+
+          echo "✅ Helm Chart 打包完成"
+          ls -lh "ingress-nginx-chart-${CHART_VERSION}.tar.gz"
+
+      # ========== 6. 保存所有镜像为离线包 ==========
+      - name: Save All Images
+        run: |
+          CHART_VERSION="${{ steps.prep_chart.outputs.chart_version }}"
+
+          # 使用 xargs 避免参数过长问题
+          echo "正在保存镜像到 ingress-nginx-images-${CHART_VERSION}.tar.gz ..."
+          xargs -a images_list.txt docker save | gzip > "ingress-nginx-images-${CHART_VERSION}.tar.gz"
+
+          echo "========================================"
+          echo "✅ 镜像离线包打包成功！"
+          ls -lh "ingress-nginx-images-${CHART_VERSION}.tar.gz"
+          echo "========================================"
+
+      # ========== 7. 生成资源摘要 ==========
+      - name: Generate Summary
+        run: |
+          CHART_VERSION="${{ steps.prep_chart.outputs.chart_version }}"
+          APP_VERSION="${{ steps.prep_chart.outputs.app_version }}"
+          IMAGE_COUNT="${{ steps.list_images.outputs.image_count }}"
+
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          # Ingress NGINX 资源打包报告
+
+          | 项目 | 值 |
+          |------|-----|
+          | Chart Version | \`${CHART_VERSION}\` |
+          | App Version | \`${APP_VERSION}\` |
+          | 镜像数量 | ${IMAGE_COUNT} |
+          | 生成时间 | $(date -u +%Y-%m-%dT%H:%M:%SZ) |
+
+          ## 镜像清单
+          \`\`\`
+          $(cat images_list.txt)
+          \`\`\`
+          EOF
+
+      # ========== 8. 上传 Artifacts ==========
+      - name: Upload Helm Chart Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ingress-nginx-chart-v${{ steps.prep_chart.outputs.chart_version }}
+          path: ingress-nginx-chart-*.tar.gz
+          retention-days: 7
+
+      - name: Upload Images Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ingress-nginx-images-v${{ steps.prep_chart.outputs.chart_version }}
+          path: ingress-nginx-images-*.tar.gz
+          retention-days: 7
