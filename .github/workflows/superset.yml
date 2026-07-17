@@ -54,7 +54,7 @@ jobs:
           sed -i '/^\s*$/d' images.txt
 
           # 替换 Superset 镜像地址
-          sed -i 's|apachesuperset\.socker\.scarf\.sh/apache/superset:.*|apache/superset:latest-py312|g' images.txt
+          sed -i 's|apachesuperset\.docker\.scarf\.sh/apache/superset:.*|apache/superset:latest-py312|g' images.txt
           
           # 添加 dockerize 镜像
           if ! grep -qxF "apache/superset:dockerize" images.txt; then
