@@ -1,0 +1,41 @@
+name: Download K8s Metrics Server Offline Images Suite
+
+on:
+  workflow_dispatch: # 支持在 GitHub Action 页面手动点击按钮触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+
+      - name: Pull and Package K8s Metrics Server Image
+        run: |
+          # 定义 GitLab CE 镜像
+          IMAGES=(
+            "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
+          )
+          echo "=========================================="
+          echo "1. 开始拉取 K8s Metrics Server 镜像（共 ${#IMAGES[@]} 个）..."
+          echo "=========================================="
+          for img in "${IMAGES[@]}"; do
+            echo "正在下载: $img ..."
+            docker pull "$img"
+          done
+          echo "=========================================="
+          echo "2. 正在合并打包并进行 gzip 极限压缩..."
+          echo "=========================================="
+          OUTPUT_NAME="k8s-metrics-server-image.tar.gz"
+          docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
+          
+          echo "=========================================="
+          echo "打包成功！K8s Metrics Server 离线包最终大小为："
+          du -sh "$OUTPUT_NAME"
+          echo "=========================================="
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: k8s-metrics-server-image-package
+          path: k8s-metrics-server-image.tar.gz
+          retention-days: 1 # 在 GitHub 上临时保留 1 天供你点击下载改为下载
