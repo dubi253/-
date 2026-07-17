@@ -29,8 +29,7 @@ jobs:
           mkdir -p ./charts
           helm pull ingress-nginx/ingress-nginx \
             --untar \
-            --untardir ./charts \
-            --dependency-update
+            --untardir ./charts
 
           CHART_DIR=$(find ./charts -maxdepth 1 -type d -name "ingress-nginx*" | head -n 1)
           echo "chart_dir=$CHART_DIR" >> $GITHUB_OUTPUT
