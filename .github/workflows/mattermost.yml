@@ -2,15 +2,6 @@ name: Package Mattermost Resources
 
 on:
   workflow_dispatch:
-    inputs:
-      mattermost_version:
-        description: "Mattermost版本 (留空则使用 latest)"
-        required: false
-        default: ""
-      operator_version:
-        description: "Mattermost Operator版本 (留空则使用最新 Chart)"
-        required: false
-        default: ""
 
 jobs:
   package-resources:
@@ -32,32 +23,22 @@ jobs:
         id: prep_chart
         run: |
           helm repo add mattermost https://helm.mattermost.com
-          OPERATOR_VER="${{ inputs.operator_version }}"
-          if [ -z "$OPERATOR_VER" ]; then
-            echo "拉取最新的 mattermost-operator Chart..."
-            helm pull mattermost/mattermost-operator --untar --untardir ./charts/operator
-          else
-            echo "拉取指定版本的 mattermost-operator Chart: $OPERATOR_VER"
-            helm pull mattermost/mattermost-operator --version "$OPERATOR_VER" --untar --untardir ./charts/operator
-          fi
+          
+          echo "拉取最新的 mattermost-operator Chart..."
+          helm pull mattermost/mattermost-operator --untar --untardir ./charts/operator
 
-          echo "拉取 mattermost-team-edition Chart..."
-          helm pull mattermost/mattermost-team-edition --untar --untardir ./charts/team-edition
 
           # 找到解压后的目录
           OPERATOR_CHART_DIR=$(find ./charts/operator -maxdepth 1 -type d -name "mattermost-operator*" | head -n 1)
-          TEAM_CHART_DIR=$(find ./charts/team-edition -maxdepth 1 -type d -name "mattermost-team-edition*" | head -n 1)
+
           echo "operator_chart_dir=$OPERATOR_CHART_DIR" >> $GITHUB_OUTPUT
-          echo "team_chart_dir=$TEAM_CHART_DIR" >> $GITHUB_OUTPUT
           echo "Operator Chart 目录: $OPERATOR_CHART_DIR"
-          echo "Team Edition Chart 目录: $TEAM_CHART_DIR"
 
       # ========== 3. 动态提取镜像列表 (核心逻辑) ==========
       - name: Extract All Images List
         id: list_images
         run: |
           OPERATOR_CHART_DIR="${{ steps.prep_chart.outputs.operator_chart_dir }}"
-          TEAM_CHART_DIR="${{ steps.prep_chart.outputs.team_chart_dir }}"
           > images_list.txt
 
           echo "正在提取 Operator 镜像..."
@@ -65,19 +46,11 @@ jobs:
             yq e '.. | select(has("image")) | .image' - | \
             grep -v '^null' | sort -u >> images_list.txt
 
-          APP_VER="${{ inputs.mattermost_version }}"
-          if [ -z "$APP_VER" ]; then
-            APP_VER="latest"
-          fi
+          echo "添加 Mattermost Enterprise 镜像..."
+          echo "mattermost/mattermost-enterprise-edition:latest" >> images_list.txt
 
-          echo "正在提取 Team Edition 镜像，Mattermost tag 使用: ${APP_VER}"
-          helm template my-mm "$TEAM_CHART_DIR" \
-            --set image.tag="$APP_VER" \
-            --set mysql.enabled=false \
-            --set externalDB.enabled=true \
-            --set externalDB.externalDriverType=postgres | \
-            yq e '.. | select(has("image")) | .image' - | \
-            grep -v '^null' | sort -u >> images_list.txt
+          echo "添加 Redis 镜像: redis:latest"
+          echo "redis:latest" >> images_list.txt
 
           echo "添加 PostgreSQL 镜像: postgres:18"
           echo "postgres:18" >> images_list.txt
@@ -110,8 +83,54 @@ jobs:
           done < images_list.txt
           echo "所有镜像拉取完成。"
 
+      - name: Checkout mattermost-patched-enterprise repository
+        uses: actions/checkout@v7.0.0
+        with:
+          repository: WasserEsser/mattermost-patched-enterprise
+          path: mattermost-patched-enterprise
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Checkout mattermost docs repository
+        uses: actions/checkout@v7.0.0
+        with:
+          repository: mattermost/docs
+          path: mattermost-docs
+          fetch-depth: 0
+
+      - name: Build patched Mattermost image
+        working-directory: mattermost-patched-enterprise
+        run: |
+          echo "使用上一步拉取的 patch 代码构建 patched image..."
+          test -f Dockerfile
+          test -f patch.sh
+
+          docker build \
+            --build-arg MATTERMOST_IMAGE_TAG=latest \
+            --tag mattermost/mattermost-enterprise-edition:latest \
+            -f Dockerfile \
+            .
+
+          echo "构建完成，当前镜像："
+          docker image inspect mattermost/mattermost-enterprise-edition:latest --format '{{.Id}} {{.RepoTags}}'
+
+      - name: Package patched repository contents
+        run: |
+          echo "打包补丁仓库内容..."
+          tar -czf mattermost-patched-enterprise.tar.gz -C mattermost-patched-enterprise .
+          ls -lh mattermost-patched-enterprise.tar.gz
+
+      - name: Package deployment guide server contents
+        run: |
+          echo "打包 mattermost/docs 的 deployment guide server 内容..."
+          mkdir -p deployment-guide-server
+          cp -r mattermost-docs/source/deployment-guide/server/. deployment-guide-server/
+          tar -czf deployment-guide-server.tar.gz -C deployment-guide-server .
+          ls -lh deployment-guide-server.tar.gz
+
       # ========== 5. 打包 Helm Chart ==========
       - name: Package Helm Chart
+        id: package_chart
         run: |
           CHART_DIR="${{ steps.prep_chart.outputs.operator_chart_dir }}"
           echo "正在构建依赖..."
@@ -119,7 +138,11 @@ jobs:
           helm dependency build "$CHART_DIR" 2>/dev/null || echo "无依赖或依赖已存在"
 
           echo "正在打包 Helm Chart..."
-          tar -czf mattermost-operator-helm.tar.gz -C "$CHART_DIR" .
+          rm -f ./*.tgz
+          helm package "$CHART_DIR" -d .
+          CHART_PACKAGE=$(find . -maxdepth 1 -name "*.tgz" | head -n 1)
+          echo "chart_package=$CHART_PACKAGE" >> $GITHUB_OUTPUT
+          echo "Helm Chart 包: $CHART_PACKAGE"
           echo "Helm Chart 打包完成。"
 
       # ========== 6. 保存所有镜像 ==========
@@ -145,7 +168,7 @@ jobs:
         uses: actions/upload-artifact@v7.0.1
         with:
           name: mattermost-helm-chart
-          path: mattermost-operator-helm.tar.gz
+          path: ${{ steps.package_chart.outputs.chart_package }}
           retention-days: 1
 
       - name: Upload Images Artifact
@@ -153,4 +176,18 @@ jobs:
         with:
           name: mattermost-images
           path: mattermost-images.tar.gz
+          retention-days: 1
+
+      - name: Upload Patched Repository Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: mattermost-patched-enterprise
+          path: mattermost-patched-enterprise.tar.gz
+          retention-days: 1
+
+      - name: Upload Deployment Guide Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: deployment-guide-server
+          path: deployment-guide-server.tar.gz
           retention-days: 1
