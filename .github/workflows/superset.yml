@@ -35,10 +35,11 @@ jobs:
 
           echo "检测到的 Superset 版本为: $SUPERSET_VERSION"
           echo "version=$SUPERSET_VERSION" >> $GITHUB_OUTPUT
-          echo "target_image=apache/superset:$SUPERSET_VERSION" >> $GITHUB_OUTPUT
+          # 使用固定的 latest-py312 标签
+          echo "target_image=apache/superset:latest-py312" >> $GITHUB_OUTPUT
 
-      # ========== 步骤 2：提取镜像列表 ==========
-      - name: Extract Images List
+      # ========== 步骤 2：提取镜像列表并替换 ==========
+      - name: Extract Images List and Replace
         id: list_images
         run: |
           helm repo add superset https://apache.github.io/superset 2>/dev/null || true
@@ -52,6 +53,9 @@ jobs:
           sed -i '/---/d' images.txt
           sed -i '/^\s*$/d' images.txt
 
+          # 替换 Superset 镜像地址
+          sed -i 's|apachesuperset\.socker\.scarf\.sh/apache/superset:.*|apache/superset:latest-py312|g' images.txt
+          
           # 添加 dockerize 镜像
           if ! grep -qxF "apache/superset:dockerize" images.txt; then
             echo "apache/superset:dockerize" >> images.txt
@@ -87,8 +91,8 @@ jobs:
       # ========== 步骤 4：构建定制镜像 (基于已拉取的镜像) ==========
       - name: Build Custom Superset Image
         run: |
-          SUPERSET_VERSION="${{ steps.superset_vars.outputs.version }}"
-          TARGET_IMAGE="${{ steps.superset_vars.outputs.target_image }}"
+          # 使用固定的 latest-py312 标签
+          TARGET_IMAGE="apache/superset:latest-py312"
 
           echo "=========================================="
           echo "正在基于本地官方镜像构建定制版本..."
@@ -142,6 +146,12 @@ jobs:
           echo "正在构建依赖..."
           helm dependency build "$CHART_DIR"
 
+          # 修改 values.yaml 中的镜像地址
+          if [ -f "$CHART_DIR/values.yaml" ]; then
+            yq e '.image.repository = "apache/superset"' -i "$CHART_DIR/values.yaml"
+            yq e '.image.tag = "latest-py312"' -i "$CHART_DIR/values.yaml"
+          fi
+
           echo "正在打包完整的 Helm Chart..."
           OUTPUT_NAME="superset-helm-full.tar.gz"
           tar -czf "$OUTPUT_NAME" -C "$CHART_DIR" .
@@ -168,13 +178,13 @@ jobs:
           OUTPUT_NAME="superset-images.tar.gz"
           
           # docker save 会读取当前本地镜像列表
-          # 这里的 apache/superset:xxx 已经是构建后的版本了
+          # 这里的 apache/superset:latest-py312 已经是构建后的版本了
           docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
 
           echo "=========================================="
           echo "打包成功！最终大小："
           du -sh "$OUTPUT_NAME"
-          echo "=========================================="
+          echo "========================================"
 
       - name: Upload Images Artifact
         uses: actions/upload-artifact@v7.0.1
