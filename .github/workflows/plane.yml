@@ -1,0 +1,193 @@
+name: Package Plane Resources for Airgapped Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      plane_version:
+        description: "Plane Enterprise Version"
+        required: true
+        default: "3.0.0"
+      chart_repo:
+        description: "Helm Chart Repository URL"
+        required: true
+        default: "https://github.com/makeplane/helm-charts"
+      include_infra_images:
+        description: "Include Infrastructure Images (Redis, PostgreSQL, RabbitMQ, MinIO, OpenSearch)"
+        required: true
+        default: "true"
+        type: boolean
+
+env:
+  HELM_REPO_URL: ${{ inputs.chart_repo }}
+  PLANE_VERSION: ${{ inputs.plane_version }}
+
+jobs:
+  package-resources:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ========== 1. 设置工具和验证输入 ==========
+      - name: Setup Kubernetes Tools
+        uses: yokawasa/action-setup-kube-tools@v0.14.0
+        with:
+          setup-tools: |
+            helm
+            yq
+            jq
+          helm: "latest"
+          yq: "latest"
+          jq: "latest"
+
+      # ========== 2. 下载并准备 Helm Chart ==========
+      - name: Download Plane Enterprise Helm Chart
+        id: download_chart
+        run: |
+          echo "正在下载 Plane Enterprise Helm Chart v${{ inputs.plane_version }}..."
+
+          # 使用 curl 下载 Helm Chart
+          CHART_URL="https://github.com/makeplane/helm-charts/releases/download/plane-enterprise-${{ inputs.plane_version }}/plane-enterprise-${{ inputs.plane_version }}.tgz"
+
+          if curl -fL -o "plane-enterprise-${{ inputs.plane_version }}.tgz" "$CHART_URL"; then
+            echo "Helm Chart 下载成功"
+            echo "chart_package=plane-enterprise-${{ inputs.plane_version }}.tgz" >> $GITHUB_OUTPUT
+          else
+            echo "❌ 无法下载 Helm Chart: $CHART_URL"
+            exit 1
+          fi
+
+      # ========== 3. 提取镜像列表 ==========
+      - name: Extract All Images List
+        id: list_images
+        run: |
+          # 创建镜像列表文件
+          > images_list.txt
+
+          echo "正在从 Helm Chart 中提取镜像..."
+
+          # 解压 Helm Chart 以获取镜像列表
+          tar -xzf plane-enterprise-${{ inputs.plane_version }}.tgz
+          CHART_DIR="plane-enterprise"
+
+          # 使用 helm template 和 yq 提取镜像
+          helm template plane-app "$CHART_DIR" | \
+            yq e '.. | select(has("image")) | .image' - | \
+            grep -v '^null' | sort -u >> images_list.txt
+
+          # 添加已知的基础设施镜像（如果用户要求）
+          if [ "${{ inputs.include_infra_images }}" = "true" ]; then
+            echo "添加基础设施镜像..."
+            cat >> images_list.txt <<EOF
+              valkey/valkey:7.2.11-alpine
+              postgres:15.7-alpine
+              rabbitmq:3.13.6-management-alpine
+              minio/minio:latest
+              minio/mc:latest
+              opensearchproject/opensearch:3.3.2
+              EOF
+          fi
+
+          # 去重并清理
+          sort -u -o images_list.txt images_list.txt
+          sed -i '/^$/d' images_list.txt
+          sed -i '/---/d' images_list.txt
+          sed -i '/^\s*$/d' images_list.txt
+
+          # 显示镜像列表
+          echo "========================================"
+          echo "       最终待拉取镜像列表"
+          echo "========================================"
+          cat images_list.txt
+          echo "========================================"
+          echo "共计 $(wc -l < images_list.txt) 个镜像"
+          echo "========================================"
+
+      # ========== 4. 拉取所有官方镜像 ==========
+      - name: Pull All Official Images
+        run: |
+          if [ ! -s images_list.txt ]; then
+            echo "❌ 镜像列表为空！"
+            exit 1
+          fi
+
+          # 读取列表并拉取镜像
+          while IFS= read -r img; do
+            echo "正在拉取: $img"
+            if docker pull "$img"; then
+              echo "✅ 成功拉取: $img"
+            else
+              echo "❌ 拉取失败: $img"
+              exit 1
+            fi
+          done < images_list.txt
+          echo "所有镜像拉取完成。"
+
+      # ========== 5. 保存所有镜像 ==========
+      - name: Save All Images
+        run: |
+          # 将文件内容转换为数组参数
+          IMAGES=$(cat images_list.txt | tr '\n' ' ')
+
+          echo "正在保存镜像到 plane-images.tar.gz ..."
+          docker save $IMAGES | gzip > plane-images.tar.gz
+
+          echo "========================================"
+          echo "镜像打包成功！"
+          ls -lh plane-images.tar.gz
+          echo "========================================"
+
+      # ========== 6. 下载并打包 developer-docs 仓库 ==========
+      - name: Checkout makeplane/developer-docs
+        uses: actions/checkout@v7.0.0
+        with:
+          repository: makeplane/developer-docs
+          path: developer-docs
+          fetch-depth: 1
+
+      - name: Package developer-docs repository
+        run: |
+          echo "正在打包 makeplane/developer-docs 仓库内容..."
+          tar --exclude-vcs -czf developer-docs.tar.gz -C developer-docs .
+          ls -lh developer-docs.tar.gz
+
+      # ========== 7. 下载并打包 plane 仓库 ==========
+      - name: Checkout makeplane/plane
+        uses: actions/checkout@v7.0.0
+        with:
+          repository: makeplane/plane
+          path: plane
+          fetch-depth: 1
+
+      - name: Package plane repository
+        run: |
+          echo "正在打包 makeplane/plane 仓库内容..."
+          tar --exclude-vcs -czf plane-source.tar.gz -C plane .
+          ls -lh plane-source.tar.gz
+
+      # ========== 8. 上传 Artifacts ==========
+      - name: Upload Helm Chart Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plane-enterprise-chart
+          path: ${{ steps.download_chart.outputs.chart_package }}
+          retention-days: 2
+
+      - name: Upload Images Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plane-images
+          path: plane-images.tar.gz
+          retention-days: 2
+
+      - name: Upload developer-docs Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: developer-docs
+          path: developer-docs.tar.gz
+          retention-days: 2
+
+      - name: Upload plane Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plane-source
+          path: plane-source.tar.gz
+          retention-days: 2
