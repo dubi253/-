@@ -1,0 +1,64 @@
+name: Download VS Code Air-Gapped SSH Bundle
+
+on:
+  workflow_dispatch: # 支持在 GitHub Action 页面手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download VS Code Installer, Server and CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 说明：这里的 linux-x64 即 x86_64（常见口语会称 x86）
+          # 这些 latest 链接会自动指向 stable 最新版本
+          declare -A FILE_URLS=(
+            ["vscode-win32-x64-user-stable.exe"]="https://update.code.visualstudio.com/latest/win32-x64-user/stable"
+            ["vscode-win32-x64-system-stable.exe"]="https://update.code.visualstudio.com/latest/win32-x64/stable"
+            ["vscode-server-linux-x64-stable.tar.gz"]="https://update.code.visualstudio.com/latest/server-linux-x64/stable"
+            ["vscode-cli-linux-x64-stable.tar.gz"]="https://update.code.visualstudio.com/latest/cli-linux-x64/stable"
+          )
+
+          mkdir -p artifacts
+
+          echo "=========================================="
+          echo "开始下载 VS Code 离线资源（共 ${#FILE_URLS[@]} 个）..."
+          echo "=========================================="
+
+          for file_name in "${!FILE_URLS[@]}"; do
+            url="${FILE_URLS[$file_name]}"
+            echo "------------------------------------------"
+            echo ">> 正在下载: $file_name"
+            echo ">> 来源地址: $url"
+
+            curl -fL --retry 5 --retry-delay 2 --connect-timeout 30 \
+              -o "artifacts/$file_name" "$url"
+
+            echo ">> 下载完成，文件大小："
+            du -h "artifacts/$file_name"
+          done
+
+          echo "------------------------------------------"
+          echo ">> 生成 SHA256 校验文件..."
+          (cd artifacts && sha256sum * > SHA256SUMS.txt)
+          cat artifacts/SHA256SUMS.txt
+
+          echo "------------------------------------------"
+          echo ">> 打包完整离线资源..."
+          tar -czf vscode-airgap-ssh-bundle.tar.gz -C artifacts .
+          du -h vscode-airgap-ssh-bundle.tar.gz
+
+          echo "=========================================="
+          echo "VS Code Air-Gapped SSH 资源准备完毕！"
+          echo "=========================================="
+
+      - name: Upload Bundle Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-airgap-ssh-bundle
+          path: |
+            artifacts/**
+            vscode-airgap-ssh-bundle.tar.gz
+          retention-days: 7
