@@ -1,0 +1,81 @@
+name: Package OpenVSX Offline Resources
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package-resources:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.0
+
+      - name: Extract Images From Docker Compose
+        run: |
+          set -euo pipefail
+
+          COMPOSE_FILE="openvsx/docker-compose.yml"
+
+          if [ ! -f "$COMPOSE_FILE" ]; then
+            echo "Error: $COMPOSE_FILE not found"
+            exit 1
+          fi
+
+          grep -E '^[[:space:]]*image:[[:space:]]*' "$COMPOSE_FILE" \
+            | sed -E 's/^[[:space:]]*image:[[:space:]]*//' \
+            | sed -E 's/["\x27]//g' \
+            | sort -u > images.txt
+
+          if [ ! -s images.txt ]; then
+            echo "Error: no images found in $COMPOSE_FILE"
+            exit 1
+          fi
+
+          echo "=========================================="
+          echo "Extracted image list"
+          echo "=========================================="
+          cat images.txt
+
+      - name: Pull Images
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r img; do
+            echo "Pulling: $img"
+            docker pull "$img"
+          done < images.txt
+
+      - name: Package Images Individually
+        run: |
+          set -euo pipefail
+
+          mkdir -p artifacts/images
+
+          while IFS= read -r img; do
+            safe_name=$(echo "$img" | sed 's#[/:@]#_#g')
+            output_name="artifacts/images/${safe_name}.tar.gz"
+
+            echo "Saving: $img -> $output_name"
+            docker save "$img" | gzip > "$output_name"
+          done < images.txt
+
+      - name: Package OpenVSX Folder
+        run: |
+          set -euo pipefail
+
+          tar --exclude-vcs -czf openvsx-source.tar.gz -C openvsx .
+
+      - name: Upload Images Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: openvsx-images
+          path: artifacts/images/*.tar.gz
+          retention-days: 1
+
+      - name: Upload OpenVSX Folder Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: openvsx-source
+          path: openvsx-source.tar.gz
+          retention-days: 1

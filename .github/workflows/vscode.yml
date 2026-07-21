@@ -39,16 +39,6 @@ jobs:
             du -h "artifacts/$file_name"
           done
 
-          echo "------------------------------------------"
-          echo ">> 生成 SHA256 校验文件..."
-          (cd artifacts && sha256sum * > SHA256SUMS.txt)
-          cat artifacts/SHA256SUMS.txt
-
-          echo "------------------------------------------"
-          echo ">> 打包完整离线资源..."
-          tar -czf vscode-airgap-ssh-bundle.tar.gz -C artifacts .
-          du -h vscode-airgap-ssh-bundle.tar.gz
-
           echo "=========================================="
           echo "VS Code Air-Gapped SSH 资源准备完毕！"
           echo "=========================================="
@@ -57,7 +47,5 @@ jobs:
         uses: actions/upload-artifact@v7.0.1
         with:
           name: vscode-airgap-ssh-bundle
-          path: |
-            artifacts/**
-            vscode-airgap-ssh-bundle.tar.gz
-          retention-days: 7
+          path: artifacts/**
+          retention-days: 2
