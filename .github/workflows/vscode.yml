@@ -16,7 +16,6 @@ jobs:
           # 这些 latest 链接会自动指向 stable 最新版本
           declare -A FILE_URLS=(
             ["vscode-win32-x64-user-stable.exe"]="https://update.code.visualstudio.com/latest/win32-x64-user/stable"
-            ["vscode-win32-x64-system-stable.exe"]="https://update.code.visualstudio.com/latest/win32-x64/stable"
             ["vscode-server-linux-x64-stable.tar.gz"]="https://update.code.visualstudio.com/latest/server-linux-x64/stable"
             ["vscode-cli-linux-x64-stable.tar.gz"]="https://update.code.visualstudio.com/latest/cli-linux-x64/stable"
           )
@@ -55,7 +54,7 @@ jobs:
           echo "=========================================="
 
       - name: Upload Bundle Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: vscode-airgap-ssh-bundle
           path: |
