@@ -1,0 +1,133 @@
+name: Package Authentik Resources
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package-resources:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ========== 1. 设置工具 ==========
+      - name: Setup Kubernetes Tools
+        uses: yokawasa/action-setup-kube-tools@v0.14.0
+        with:
+          setup-tools: |
+            helm
+            yq
+          helm: "latest"
+          yq: "latest"
+
+      # ========== 2. 准备 Helm Chart ==========
+      - name: Pull and Prepare Charts
+        id: prep_chart
+        run: |
+          helm repo add authentik https://charts.goauthentik.io
+          helm repo update
+
+          echo "拉取最新的 authentik Chart..."
+          helm pull authentik/authentik --untar --untardir ./charts
+
+          # 找到解压后的目录
+          CHART_DIR=$(find ./charts -maxdepth 1 -type d -name "authentik" | head -n 1)
+
+          if [ -z "$CHART_DIR" ]; then
+            echo "Error: 未找到解压后的 authentik Chart 目录"
+            exit 1
+          fi
+
+          echo "chart_dir=$CHART_DIR" >> $GITHUB_OUTPUT
+          echo "Authentik Chart 目录: $CHART_DIR"
+
+      # ========== 3. 动态提取镜像列表 (核心逻辑) ==========
+      - name: Extract All Images List
+        id: list_images
+        run: |
+          CHART_DIR="${{ steps.prep_chart.outputs.chart_dir }}"
+          > images_list.txt
+
+          echo "正在从 Chart 提取镜像..."
+          # 使用 helm template 和 yq 提取所有镜像
+          helm template my-auth "$CHART_DIR" | \
+            yq e '.. | select(has("image")) | .image' - | \
+            grep -v '^null' | sort -u >> images_list.txt
+
+          # Authentik 通常依赖 PostgreSQL 和 Redis，确保它们被包含
+          # 以下方法更通用，能捕获所有依赖的镜像
+          helm dependency list "$CHART_DIR" | grep -v 'NAME' | grep -v 'STATUS' | grep -v 'REPOSITORY' | awk '{print $1}' | while read subchart; do
+            echo "提取子 Chart: $subchart 的镜像..."
+            helm template "$subchart" "$CHART_DIR/charts/$subchart" | \
+              yq e '.. | select(has("image")) | .image' - | \
+              grep -v '^null' | sort -u >> images_list.txt
+          done
+
+          # 去重并清理
+          sort -u -o images_list.txt images_list.txt
+          sed -i '/^$/d' images_list.txt
+          sed -i '/---/d' images_list.txt
+
+          echo "========================================"
+          echo "       最终待拉取镜像列表"
+          echo "========================================"
+          cat images_list.txt
+          echo "========================================"
+          echo "共计 $(wc -l < images_list.txt) 个镜像"
+
+      # ========== 4. 拉取所有官方镜像 ==========
+      - name: Pull All Official Images
+        run: |
+          if [ ! -s images_list.txt ]; then
+            echo "Error: 镜像列表为空！"
+            exit 1
+          fi
+
+          # 读取列表并拉取
+          while IFS= read -r img; do
+            echo "正在拉取: $img"
+            docker pull "$img"
+          done < images_list.txt
+          echo "所有镜像拉取完成。"
+
+      # ========== 5. 打包 Helm Chart ==========
+      - name: Package Helm Chart
+        id: package_chart
+        run: |
+          CHART_DIR="${{ steps.prep_chart.outputs.chart_dir }}"
+          echo "正在构建依赖..."
+          helm dependency build "$CHART_DIR"
+
+          echo "正在打包 Helm Chart..."
+          rm -f ./*.tgz
+          helm package "$CHART_DIR" -d .
+          CHART_PACKAGE=$(find . -maxdepth 1 -name "*.tgz" | head -n 1)
+          echo "chart_package=$CHART_PACKAGE" >> $GITHUB_OUTPUT
+          echo "Helm Chart 包: $CHART_PACKAGE"
+
+      # ========== 6. 保存所有镜像 ==========
+      - name: Save All Images
+        run: |
+          # 将文件内容转换为数组参数
+          IMAGES=$(cat images_list.txt | tr '\n' ' ')
+
+          echo "正在保存镜像到 authentik-images.tar.gz ..."
+          docker save $IMAGES | gzip > authentik-images.tar.gz
+
+          echo "========================================"
+          echo "打包成功！"
+          ls -lh authentik-images.tar.gz
+          echo "========================================"
+
+      # ========== 7. 上传 Artifacts ==========
+      - name: Upload Helm Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: authentik-helm-chart
+          path: ${{ steps.package_chart.outputs.chart_package }}
+          retention-days: 1
+
+      - name: Upload Images Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: authentik-images
+          path: authentik-images.tar.gz
+          retention-days: 1
