@@ -1,0 +1,86 @@
+name: Download Browser Installers
+
+on:
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  download-and-upload:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Create download directory
+        run: mkdir -p installers
+
+      # ==========================================
+      # 1. Google Chrome for Ubuntu (DEB)
+      # ==========================================
+      - name: Download Google Chrome (Ubuntu/DEB)
+        run: |
+          # 直接访问官方仓库获取最新版本的 .deb 文件名
+          # 使用 shell 命令解析 HTML 或通过 API 获取文件名
+          CHROME_DEB_URL="https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+          echo "Downloading Chrome Ubuntu from: $CHROME_DEB_URL"
+          curl -L -o "installers/google-chrome-stable_current_amd64.deb" "$CHROME_DEB_URL"
+
+      # ==========================================
+      # 2. Google Chrome for Windows (x64)
+      # ==========================================
+      - name: Download Google Chrome (Windows/x64)
+        run: |
+          # 这是一个企业版MSI静态链接，通常为最新版
+          CHROME_WIN_URL="https://dl.google.com/tag/s/dl/chrome/install/googlechromestandaloneenterprise64.msi"
+          echo "Downloading Chrome Windows from: $CHROME_WIN_URL"
+          
+          # 下载并尝试保留原始文件名，或者统一命名
+          # Google 的这个链接通常直接下载为 .msi
+          curl -L -o "installers/google-chrome-stable_win-x64.msi" "$CHROME_WIN_URL"
+
+      # ==========================================
+      # 3. Microsoft Edge for Ubuntu (DEB)
+      # ==========================================
+      - name: Download Microsoft Edge (Ubuntu/DEB)
+        run: |
+          # 微软官方的 Edge Linux 下载链接
+          EDGE_DEB_URL="https://go.microsoft.com/fwlink/?linkid=2099582"
+          echo "Downloading Edge Ubuntu from: $EDGE_DEB_URL"
+          
+          # 获取重定向后的真实文件名
+          REAL_FILENAME=$(curl -sI -L "$EDGE_DEB_URL" | grep -i "content-disposition" | sed -n 's/.*filename=\([^;]*\).*/\1/p' | tr -d '\r' | sed 's/"//g')
+          
+          # 如果文件名解析失败，使用备用名
+          if [ -z "$REAL_FILENAME" ]; then
+            REAL_FILENAME="microsoft-edge-stable_amd64.deb"
+          fi
+          
+          echo "Resolved filename: $REAL_FILENAME"
+          curl -L -o "installers/$REAL_FILENAME" "$EDGE_DEB_URL"
+
+      # ==========================================
+      # 4. Microsoft Edge for Windows (x64)
+      # ==========================================
+      - name: Download Microsoft Edge (Windows/x64)
+        run: |
+          # 微软官方的 Edge Windows x64 下载链接
+          EDGE_WIN_URL="https://go.microsoft.com/fwlink/?linkid=2108834"
+          echo "Downloading Edge Windows from: $EDGE_WIN_URL"
+          
+          # 获取重定向后的真实文件名 (如 MicrosoftEdgeSetup_X64.exe)
+          REAL_FILENAME=$(curl -sI -L "$EDGE_WIN_URL" | grep -i "content-disposition" | sed -n 's/.*filename=\([^;]*\).*/\1/p' | tr -d '\r' | sed 's/"//g')
+          
+          # 如果文件名解析失败，使用备用名
+          if [ -z "$REAL_FILENAME" ]; then
+            REAL_FILENAME="microsoft-edge-stable_win-x64.msi"
+          fi
+          
+          echo "Resolved filename: $REAL_FILENAME"
+          curl -L -o "installers/$REAL_FILENAME" "$EDGE_WIN_URL"
+
+      # ==========================================
+      # 5. 上传 Artifacts
+      # ==========================================
+      - name: Upload Installers as Artifacts
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: browser-installers-offline
+          path: installers/
+          retention-days: 1
