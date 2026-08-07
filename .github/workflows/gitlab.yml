@@ -8,9 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4 # 修正了未发布的版本号，建议使用稳定的 v4
 
-      - name: Pull and Package GitLab CE Images
+      - name: Pull and Package GitLab CE Image
         run: |
           # 定义 GitLab CE 镜像
           IMAGES=(
@@ -20,83 +20,31 @@ jobs:
             "gitlab/gitlab-ce:18.8.11-ce.0"
           )
           
-          # 创建存放打包文件的目录
-          mkdir -p output_images
-          
           echo "=========================================="
-          echo "开始逐个拉取并导出镜像（共 ${#IMAGES[@]} 个）..."
+          echo "1. 开始拉取 GitLab CE 镜像（共 ${#IMAGES[@]} 个）..."
           echo "=========================================="
-          
           for img in "${IMAGES[@]}"; do
-            echo "------------------------------------------"
-            echo "正在处理: $img"
-            echo "------------------------------------------"
-            
-            # 1. 拉取镜像
+            echo "正在下载: $img ..."
             docker pull "$img"
-            
-            # 2. 生成安全的文件名（将 / 和 : 替换为连字符）
-            # 例如: gitlab/gitlab-ce:16.8.10-ce.0 -> gitlab-gitlab-ce-16.8.10-ce.0.tar
-            SAFE_NAME=$(echo "$img" | tr '/' '-' | tr ':' '-')
-            OUTPUT_NAME="output_images/${SAFE_NAME}.tar"
-            
-            # 3. 直接使用 docker save 导出为 .tar 文件（不进行 gzip 压缩）
-            echo "正在导出为: $OUTPUT_NAME ..."
-            docker save "$img" -o "$OUTPUT_NAME"
-            
-            echo "导出完成，大小："
-            du -sh "$OUTPUT_NAME"
           done
+          
+          echo "=========================================="
+          echo "2. 正在合并打包、极限压缩并按 5110MB 分割..."
+          echo "=========================================="
+          
+          # 使用管道：docker save -> gzip -> split (限制每个包最大 5110M)
+          # -b 5110M 表示每个分割文件最大 5110MB
+          # gitlab-ce-image.tar.gz. 是生成文件的统一前缀
+          docker save "${IMAGES[@]}" | gzip | split -b 5110M -d -a 2 - "gitlab-ce-image.tar.gz."
+          
+          echo "=========================================="
+          echo "打包与分割成功！生成的分卷包如下："
+          ls -lh gitlab-ce-image.tar.gz.*
+          echo "=========================================="
 
       - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1 # 升级到 actions/upload-artifact v4 以更好地支持多文件上传
         with:
-          name: gitlab-ce-images-packages
-          path: output_images/*.tar
+          name: gitlab-ce-image-package
+          path: gitlab-ce-image.tar.gz.*
           retention-days: 1 # 在 GitHub 上临时保留 1 天供你点击下载
-
-# name: Download GitLab CE Offline Images Suite
-
-# on:
-#   workflow_dispatch: # 支持在 GitHub Action 页面手动点击按钮触发
-
-# jobs:
-#   build:
-#     runs-on: ubuntu-latest
-#     steps:
-#       - name: Checkout
-#         uses: actions/checkout@v7.0.0
-
-#       - name: Pull and Package GitLab CE Image
-#         run: |
-#           # 定义 GitLab CE 镜像
-#           IMAGES=(
-#             "gitlab/gitlab-ce:16.8.10-ce.0"
-#             "gitlab/gitlab-ce:16.11.10-ce.0"
-#             "gitlab/gitlab-ce:17.8.7-ce.0"
-#             "gitlab/gitlab-ce:18.8.11-ce.0"
-            
-#           )
-#           echo "=========================================="
-#           echo "1. 开始拉取 GitLab CE 镜像（共 ${#IMAGES[@]} 个）..."
-#           echo "=========================================="
-#           for img in "${IMAGES[@]}"; do
-#             echo "正在下载: $img ..."
-#             docker pull "$img"
-#           done
-#           echo "=========================================="
-#           echo "2. 正在合并打包并进行 gzip 极限压缩..."
-#           echo "=========================================="
-#           OUTPUT_NAME="gitlab-ce-image.tar.gz"
-#           docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
-          
-#           echo "=========================================="
-#           echo "打包成功！GitLab CE 离线包最终大小为："
-#           du -sh "$OUTPUT_NAME"
-#           echo "=========================================="
-#       - name: Upload a Build Artifact
-#         uses: actions/upload-artifact@v7.0.1
-#         with:
-#           name: gitlab-ce-image-package
-#           path: gitlab-ce-image.tar.gz
-#           retention-days: 1 # 在 GitHub 上临时保留 1 天供你点击下载
