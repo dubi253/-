@@ -14,9 +14,11 @@ jobs:
         run: |
           # 定义 GitLab CE 镜像
           IMAGES=(
-            "gitlab/gitlab-ce:17.11.7-ce.0"
-            "gitlab/gitlab-ce:18.11.9-ce.0"
-            "gitlab/gitlab-ce:latest"
+            "gitlab/gitlab-ce:16.8.10-ce.0"
+            "gitlab/gitlab-ce:16.11.10-ce.0"
+            "gitlab/gitlab-ce:17.8.7-ce.0"
+            "gitlab/gitlab-ce:18.8.11-ce.0"
+            
           )
           echo "=========================================="
           echo "1. 开始拉取 GitLab CE 镜像（共 ${#IMAGES[@]} 个）..."
