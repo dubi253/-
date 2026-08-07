@@ -14,8 +14,8 @@ jobs:
         run: |
           # 定义 GitLab CE 镜像
           IMAGES=(
-            "gitlab/gitlab-ce:17.1.8-ce.0"
-            "gitlab/gitlab-ce:17.5.5-ce.0"
+            "gitlab/gitlab-ce:18.1.6-ce.0"
+            "gitlab/gitlab-ce:18.5.7-ce.0"
             
           )
           echo "=========================================="
