@@ -41,7 +41,7 @@ jobs:
           du -sh "$OUTPUT_NAME"
           echo "=========================================="
       - name: Split & upload large data
-        uses: dubi253/Split-and-Upload-Artifacts@v1.0.0
+        uses: dubi253/Split-and-Upload-Artifacts@v1.0.1
         with:
           source: sglang-images.tar.gz
           volume-size: 5100m
