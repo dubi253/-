@@ -1,110 +1,49 @@
 name: Download SGLang Offline Image
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 支持在 GitHub Action 页面手动点击按钮触发
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 限制并发，防止多次运行互相干扰（可选）
-    concurrency:
-      group: ${{ github.workflow }}
-      cancel-in-progress: true
-
-    # 定义输出变量，用于后续 Job 读取
-    outputs:
-      split_files: ${{ steps.split_manifest.outputs.files }}
-
     steps:
 
-      # - name: Disk Space Reclaimer
-      #   uses: insightsengineering/disk-space-reclaimer@v1.1.2
-      #   with:
-      #     # this might remove tools that are actually needed,
-      #     # if set to "true" but frees about 6 GB
-      #     tools-cache: false
+      - name: Disk Space Reclaimer
+        uses: insightsengineering/disk-space-reclaimer@v1.1.2
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tools-cache: false
 
-      - name: Pull Images
-        id: pull_images
+      - name: Pull and Package Images
         run: |
           IMAGES=(
-            "lmsysorg/sglang:main-cann9.0.0-a3"
+            "lmsysorg/sglang:latest-cu130-runtime"
+            # "lmsysorg/sglang:latest-cu129-runtime"
           )
-          
+          OUTPUT_NAME="sglang-images.tar"
+
           echo "=========================================="
-          echo "1. 开始拉取镜像..."
+          echo "1. 开始拉取 SGLang 镜像（共 ${#IMAGES[@]} 个）..."
           echo "=========================================="
-          
           for img in "${IMAGES[@]}"; do
             echo "正在下载: $img ..."
             docker pull "$img"
           done
-          
-          # 将镜像列表保存到环境变量或 GITHUB_ENV 以便后续使用
-          # 注意：多行变量在 bash 中处理比较麻烦，这里直接在下一步再次引用数组最简单，或者保存为文本文件
-          printf "%s\n" "${IMAGES[@]}" > /tmp/images_list.txt
 
-      - name: Split Stream Directly (No intermediate tar)
-        id: split_stream
-        run: |
-          # 优化点：使用 split 直接切分流，不产生中间大文件，节省磁盘 IO 和空间
-          # docker save 输出流 | split 按大小切分
           echo "=========================================="
-          echo "2. 流式打包并分片 (Limit: 5GB/part)..."
+          echo "2. 正在合并打包"
           echo "=========================================="
-          
-          # 读取镜像列表
-          IMAGES=$(cat /tmp/images_list.txt | tr '\n' ' ')
-          
-          # 使用 split 命令:
-          # -d: 使用数字后缀 (00, 01...)
-          # -b 5120M: 每个文件 5GB (5 * 1024) < 5GB
-          # sglang-part_: 文件前缀
-          docker save $IMAGES | split -d -b 5120M - sglang-part_
-          
-          # 查看生成的文件
-          ls -lh sglang-part_*
+          docker save "${IMAGES[@]}" > "$OUTPUT_NAME"
 
-      - name: Generate Split Manifest
-        id: split_manifest
-        run: |
-          # 动态获取所有生成的分片文件名
-          # 将文件列表转换为 JSON 格式，供 Matrix 使用
-          FILES=$(ls -1 sglang-part_* | jq -R -s -c 'split("\n") | map(select(length > 0))')
-          
-          echo "Generated files: $FILES"
-          echo "files=$FILES" >> $GITHUB_OUTPUT
+          echo "=========================================="
+          echo "打包成功！SGLang 离线包最终大小为："
+          du -sh "$OUTPUT_NAME"
+          echo "=========================================="
 
-      - name: Upload Parts in Parallel
-        # 优化点：使用 Matrix 并行上传所有分片
-        strategy:
-          fail-fast: false # 即使某个分片失败，其他分片继续尝试
-          matrix:
-            file: ${{ fromJson(steps.split_manifest.outputs.files) }}
-        
+      - name: Upload Artifact to GitHub
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: sglang-image-part-${{ matrix.file }} # 动态名称
-          path: ${{ matrix.file }}
-          retention-days: 1
-          if-no-files-found: error
+          path: sglang-images.tar
           archive: false
-
-  # 验证/下载测试 Job (可选)
-  verify:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v8.0.1
-      - name: Merge and Load
-        run: |
-          # 将分片按顺序合并回 tar 文件
-          cat sglang-part_* > sglang-images.tar
-          
-          # 验证 tar 文件完整性
-          tar -tvf sglang-images.tar | head -n 5
-          
-          # 尝试加载 (测试镜像是否完整)
-          docker load < sglang-images.tar
-          docker images
+          retention-days: 3 # 在 GitHub 上临时保留 2 天供你点击下载
