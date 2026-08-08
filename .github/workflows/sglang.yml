@@ -15,13 +15,13 @@ jobs:
           # if set to "true" but frees about 6 GB
           tools-cache: false
 
-      - name: Pull and Package Images
+      - name: Pull and Package Images (no gzip)
         run: |
           IMAGES=(
             "lmsysorg/sglang:latest-cu130-runtime"
             # "lmsysorg/sglang:latest-cu129-runtime"
           )
-          OUTPUT_NAME="sglang-images.tar.gz"
+          TAR_NAME="sglang-images.tar"
 
           echo "=========================================="
           echo "1. 开始拉取 SGLang 镜像（共 ${#IMAGES[@]} 个）..."
@@ -32,20 +32,22 @@ jobs:
           done
 
           echo "=========================================="
-          echo "2. 正在合并打包并进行 gzip 极限压缩..."
+          echo "2. 导出为 tar（不压缩）..."
           echo "=========================================="
-          docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
+          docker save "${IMAGES[@]}" -o "$TAR_NAME"
 
-          echo "=========================================="
-          echo "打包成功！SGLang 离线包最终大小为："
-          du -sh "$OUTPUT_NAME"
-          echo "=========================================="
-      - name: Split & upload large data
-        uses: dubi253/Split-and-Upload-Artifacts@v1.0.1
+          echo "导出完成，文件大小："
+          du -sh "$TAR_NAME"
+
+      - name: 分卷存储（仅切割，不压缩）
+        run: |
+          # -s 5g 每卷 5GB，-0 表示存储模式（不压缩）
+          zip -s 5100m -0 sglang-images.zip sglang-images.tar
+
+      - name: 将每个分卷作为独立 Artifact 上传
+        uses: infogulch/upload-zip-artifacts@v1.0.2
         with:
-          source: sglang-images.tar.gz
-          volume-size: 5100m
-          archive-name: sglang-images
+          path: "sglang-images.z*"
       # - name: Upload Artifact to GitHub
       #   uses: actions/upload-artifact@v7.0.1
       #   with:
