@@ -18,7 +18,8 @@ jobs:
       - name: Pull and Package Images (no gzip)
         run: |
           IMAGES=(
-            "lmsysorg/sglang:latest-cu130-runtime"
+            # "lmsysorg/sglang:latest-cu130-runtime"
+            "msysorg/sglang:main-cann9.0.0-a3"
             # "lmsysorg/sglang:latest-cu129-runtime"
           )
           TAR_NAME="sglang-images.tar"
@@ -44,10 +45,19 @@ jobs:
           # -s 5g 每卷 5GB，-0 表示存储模式（不压缩）
           zip -s 5100m -0 sglang-images.zip sglang-images.tar
 
-      - name: 将每个分卷作为独立 Artifact 上传
-        uses: infogulch/upload-zip-artifacts@v1.0.2
-        with:
-          path: "sglang-images.z*"
+      - name: 将每个分卷作为独立 Artifact 上传（官方 gh 命令）
+        run: |
+          for file in sglang-images.z*; do
+            echo "上传 $file ..."
+            gh run upload ${{ github.run_id }} "$file" --name "$file"
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 默认就有写入权限
+
+      # - name: 将每个分卷作为独立 Artifact 上传
+      #   uses: infogulch/upload-zip-artifacts@v1.0.2
+      #   with:
+      #     path: "sglang-images.z*"
       # - name: Upload Artifact to GitHub
       #   uses: actions/upload-artifact@v7.0.1
       #   with:
