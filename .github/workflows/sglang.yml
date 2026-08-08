@@ -21,7 +21,7 @@ jobs:
             "lmsysorg/sglang:latest-cu130-runtime"
             # "lmsysorg/sglang:latest-cu129-runtime"
           )
-          OUTPUT_NAME="sglang-images.tar"
+          OUTPUT_NAME="sglang-images-cu130.tar.gz"
 
           echo "=========================================="
           echo "1. 开始拉取 SGLang 镜像（共 ${#IMAGES[@]} 个）..."
@@ -32,9 +32,9 @@ jobs:
           done
 
           echo "=========================================="
-          echo "2. 正在合并打包"
+          echo "2. 正在合并打包并进行 gzip 极限压缩..."
           echo "=========================================="
-          docker save "${IMAGES[@]}" > "$OUTPUT_NAME"
+          docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
 
           echo "=========================================="
           echo "打包成功！SGLang 离线包最终大小为："
@@ -44,6 +44,6 @@ jobs:
       - name: Upload Artifact to GitHub
         uses: actions/upload-artifact@v7.0.1
         with:
-          path: sglang-images.tar
+          path: sglang-images-cu130.tar.gz
           archive: false
           retention-days: 3 # 在 GitHub 上临时保留 2 天供你点击下载
