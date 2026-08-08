@@ -7,15 +7,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.0
-
       - name: Pull and Package GitLab CE Image
         run: |
           # 定义 GitLab CE 镜像
           IMAGES=(
-            "gitlab/gitlab-ce:18.1.6-ce.0"
-            "gitlab/gitlab-ce:18.5.7-ce.0"
+            "gitlab/gitlab-ce:latest"
             
           )
           echo "=========================================="
@@ -38,6 +34,6 @@ jobs:
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: gitlab-ce-image-package
           path: gitlab-ce-image.tar.gz
-          retention-days: 1 # 在 GitHub 上临时保留 1 天供你点击下载
+          archive: false
+          retention-days: 3 # 在 GitHub 上临时保留 3 天供你点击下载
