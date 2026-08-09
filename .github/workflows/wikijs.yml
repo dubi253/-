@@ -28,7 +28,7 @@ jobs:
           echo "2. 正在合并打包并进行 gzip 极限压缩..."
           echo "=========================================="
           # docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
-          docker save "${IMAGES[@]}"  | gzip | split -b 200m -d - "$OUTPUT_NAME.part"
+          docker save "${IMAGES[@]}" | gzip | split -b 200m -d - "$OUTPUT_NAME.part"
 
           # echo "=========================================="
           # echo "打包成功！Wiki.js 和 PG15 离线包最终大小为："
@@ -41,6 +41,13 @@ jobs:
           echo "分片文件列表："
           ls -lh "$OUTPUT_NAME".part*
 
+          echo "=========================================="
+          echo "加载镜像命令（在目标机器上执行）："
+          echo "  cat $OUTPUT_NAME.part* | docker load"
+          echo "=========================================="
+
+          
+
       # - name: Upload Artifact to GitHub
       #   uses: actions/upload-artifact@v7.0.1
       #   with:
@@ -48,6 +55,6 @@ jobs:
       #     path: wikijs-images.tar.gz
           # retention-days: 2 # 在 GitHub 上临时保留 2 天供你点击下载
       - name: Upload files as artifacts
-        uses: dubi253/upload-artifacts@v1.0.6
+        uses: dubi253/upload-artifacts@v1.0.7
         with:
           path: wikijs-images.tar.gz.part*
