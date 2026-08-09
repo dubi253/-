@@ -48,6 +48,6 @@ jobs:
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: multica-offline-package
           path: multica-offline-package.tar.gz
+          archive: false
           retention-days: 1 # 在 GitHub 上临时保留 2 天供你点击下载
