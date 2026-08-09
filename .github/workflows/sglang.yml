@@ -34,7 +34,7 @@ jobs:
           echo "=========================================="
           echo "2. 正在合并打包并进行 gzip 极限压缩..."
           echo "=========================================="
-          docker save "${IMAGES[@]}" | gzip | split -b 5g -d - "$OUTPUT_NAME.part"
+          docker save "${IMAGES[@]}" | gzip | split -b 5G -d - "$OUTPUT_NAME.part"
 
           echo "=========================================="
           echo "打包分片成功！SGLang 离线包总大小为："
