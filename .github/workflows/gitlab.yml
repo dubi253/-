@@ -11,8 +11,8 @@ jobs:
         run: |
           # 定义 GitLab CE 镜像
           IMAGES=(
-            "gitlab/gitlab-ce:latest"
-            
+            "gitlab/gitlab-ce:18.2.8-ce.0"
+            "gitlab/gitlab-ce:18.3.6-ce.0"
           )
           echo "=========================================="
           echo "1. 开始拉取 GitLab CE 镜像（共 ${#IMAGES[@]} 个）..."
@@ -36,4 +36,4 @@ jobs:
         with:
           path: gitlab-ce-image.tar.gz
           archive: false
-          retention-days: 3 # 在 GitHub 上临时保留 3 天供你点击下载
+          retention-days: 1 # 在 GitHub 上临时保留 3 天供你点击下载
