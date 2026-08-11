@@ -10,7 +10,7 @@ jobs:
       - name: Download VS Code & Extensions
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           mkdir -p artifacts
 
           # ==========================================================
