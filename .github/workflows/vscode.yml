@@ -29,7 +29,6 @@ jobs:
             echo ">> $name"
             curl -fL --retry 5 --retry-delay 2 --connect-timeout 30 \
               -o "artifacts/$name" "${CORE_FILES[$name]}" \
-
               || { echo "!! 失败: $name"; continue; }
             du -h "artifacts/$name"
           done
@@ -76,7 +75,6 @@ jobs:
               -H 'Content-Type: application/json' \
               -H 'Accept: application/json;api-version=3.0-preview.1' \
               --data-raw "{\"filters\":[{\"criteria\":[{\"filterType\":7,\"value\":\"$ext_id\"}]}],\"flags\":914}" \
-
               | jq -r '.results[0].extensions[0].versions[0].version // empty'
           }
 
