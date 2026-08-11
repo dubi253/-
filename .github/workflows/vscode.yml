@@ -1,51 +1,159 @@
 name: Download VS Code Air-Gapped SSH Bundle
 
 on:
-  workflow_dispatch: # 支持在 GitHub Action 页面手动触发
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Download VS Code Installer, Server and CLI
+      - name: Download VS Code & Extensions
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          mkdir -p artifacts
 
-          # 说明：这里的 linux-x64 即 x86_64（常见口语会称 x86）
-          # 这些 latest 链接会自动指向 stable 最新版本
-          declare -A FILE_URLS=(
+          # ==========================================================
+          # ① VS Code 核心组件
+          # ==========================================================
+          declare -A CORE_FILES=(
             ["vscode-win32-x64-user-stable.exe"]="https://update.code.visualstudio.com/latest/win32-x64-user/stable"
             ["vscode-server-linux-x64-stable.tar.gz"]="https://update.code.visualstudio.com/latest/server-linux-x64/stable"
             ["vscode-cli-linux-x64-stable.tar.gz"]="https://update.code.visualstudio.com/latest/cli-linux-x64/stable"
           )
 
-          mkdir -p artifacts
-
           echo "=========================================="
-          echo "开始下载 VS Code 离线资源（共 ${#FILE_URLS[@]} 个）..."
+          echo "下载 VS Code 核心组件..."
           echo "=========================================="
-
-          for file_name in "${!FILE_URLS[@]}"; do
-            url="${FILE_URLS[$file_name]}"
-            echo "------------------------------------------"
-            echo ">> 正在下载: $file_name"
-            echo ">> 来源地址: $url"
-
+          for name in "${!CORE_FILES[@]}"; do
+            echo ">> $name"
             curl -fL --retry 5 --retry-delay 2 --connect-timeout 30 \
-              -o "artifacts/$file_name" "$url"
+              -o "artifacts/$name" "${CORE_FILES[$name]}" \
 
-            echo ">> 下载完成，文件大小："
-            du -h "artifacts/$file_name"
+              || { echo "!! 失败: $name"; continue; }
+            du -h "artifacts/$name"
+          done
+
+          # ==========================================================
+          # ② 扩展列表 —— 在此维护（格式: publisher.name）
+          # ==========================================================
+          EXTENSIONS=(
+            "ms-python.python"
+            "ms-python.vscode-pylance"
+            "ms-python.debugpy"
+            "ms-python.vscode-python-envs"
+            "ms-toolsai.jupyter"
+            "ms-toolsai.vscode-jupyter-cell-tags"
+            "ms-toolsai.jupyter-keymap"
+            "ms-toolsai.jupyter-renderers"
+            "ms-toolsai.vscode-jupyter-slideshow"
+            "yzhang.markdown-all-in-one"
+            "esbenp.prettier-vscode"
+            "mechatroner.rainbow-csv"
+            "ms-vscode-remote.remote-ssh"
+            "ms-vscode-remote.remote-ssh-edit"
+            "ms-vscode.remote-explorer"
+            "tomoki1207.pdf"
+            "ms-azuretools.vscode-containers"
+            "ms-toolsai.datawrangler"
+            "ms-ceintl.vscode-language-pack-zh-hans"
+            "kilocode.kilo-code"
+            "ms-vscode.cpptools"
+            "ms-vscode.cpptools-themes"
+            "pkief.material-icon-theme"
+            "eamodio.gitlens"
+            "ms-vsliveshare.vsliveshare"
+            "wakatime.vscode-wakatime"
+          )
+
+          TARGETS=("win32-x64" "linux-x64")
+          ASSET_BASE="https://{pub}.gallery.vsassets.io/_apis/public/gallery/publisher/{pub}/extension/{name}/{ver}/assetbyname/Microsoft.VisualStudio.Services.VSIXPackage"
+
+          # 获取最新版本号（轻量 GET 请求，仅取版本号）
+          get_latest_version() {
+            local ext_id="$1"
+            curl -sL "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery" \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json;api-version=3.0-preview.1' \
+              --data-raw "{\"filters\":[{\"criteria\":[{\"filterType\":7,\"value\":\"$ext_id\"}]}],\"flags\":914}" \
+
+              | jq -r '.results[0].extensions[0].versions[0].version // empty'
+          }
+
+          # 通过 Asset URL 下载 VSIX（带平台回退）
+          download_vsix() {
+            local pub="$1" name="$2" ver="$3" platform="$4" outfile="$5"
+            local base_url="${ASSET_BASE//\{pub\}/$pub}"
+            base_url="${base_url//\{name\}/$name}"
+            base_url="${base_url//\{ver\}/$ver}"
+
+            # 优先尝试指定平台
+            local url="${base_url}?targetPlatform=${platform}"
+            echo "   尝试: $platform"
+            if curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
+                 -o "$outfile" "$url" 2>/dev/null; then
+              return 0
+            fi
+
+            # 回退到 universal（不带 targetPlatform 参数）
+            echo "   回退: universal"
+            if curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
+                 -o "$outfile" "$base_url" 2>/dev/null; then
+              return 0
+            fi
+
+            return 1
+          }
+
+          echo "=========================================="
+          echo "下载扩展 VSIX（${#EXTENSIONS[@]} 个 × ${#TARGETS[@]} 平台）..."
+          echo "=========================================="
+
+          declare -A UNIVERSAL_CACHE  # universal 包去重
+
+          for ext in "${EXTENSIONS[@]}"; do
+            IFS='.' read -r pub name <<< "$ext"
+            echo "------------------------------------------"
+            echo ">> [$ext] 查询最新版本..."
+
+            version="$(get_latest_version "$ext" || true)"
+            if [ -z "$version" ]; then
+              echo "!! 无法获取版本号，跳过 $ext"
+              continue
+            fi
+            echo ">> [$ext] 版本: $version"
+
+            for target in "${TARGETS[@]}"; do
+              outfile="artifacts/${ext}__${target}.vsix"
+
+              if download_vsix "$pub" "$name" "$version" "$target" "$outfile"; then
+                # 检查是否实际下载到 universal（文件大小与缓存对比去重）
+                size=$(stat -c%s "$outfile" 2>/dev/null || echo 0)
+                cache_key="${ext}_${size}"
+
+                if [ -n "${UNIVERSAL_CACHE[$cache_key]:-}" ]; then
+                  # 同大小 = 大概率是同一个 universal 包，用缓存覆盖
+                  echo "   复用 universal 包（与 ${UNIVERSAL_CACHE[$cache_key]} 相同）"
+                  cp "artifacts/${UNIVERSAL_CACHE[$cache_key]}" "$outfile"
+                else
+                  UNIVERSAL_CACHE[$cache_key]="${ext}__${target}.vsix"
+                fi
+
+                du -h "$outfile"
+              else
+                echo "!! 下载失败: $ext ($target)"
+              fi
+            done
           done
 
           echo "=========================================="
-          echo "VS Code Air-Gapped SSH 资源准备完毕！"
+          echo "全部完成！产物列表："
           echo "=========================================="
+          ls -lh artifacts/
 
       - name: Upload Bundle Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: vscode-airgap-ssh-bundle
+          name: vscode-and-extension-bundle
           path: artifacts/**
           retention-days: 2
