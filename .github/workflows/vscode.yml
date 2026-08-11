@@ -68,7 +68,7 @@ jobs:
           TARGETS=("win32-x64" "linux-x64")
           ASSET_BASE="https://{pub}.gallery.vsassets.io/_apis/public/gallery/publisher/{pub}/extension/{name}/{ver}/assetbyname/Microsoft.VisualStudio.Services.VSIXPackage"
 
-          # 获取最新版本号（轻量 GET 请求，仅取版本号）
+          # 获取最新版本号
           get_latest_version() {
             local ext_id="$1"
             curl -sL "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery" \
@@ -78,36 +78,12 @@ jobs:
               | jq -r '.results[0].extensions[0].versions[0].version // empty'
           }
 
-          # 通过 Asset URL 下载 VSIX（带平台回退）
-          download_vsix() {
-            local pub="$1" name="$2" ver="$3" platform="$4" outfile="$5"
-            local base_url="${ASSET_BASE//\{pub\}/$pub}"
-            base_url="${base_url//\{name\}/$name}"
-            base_url="${base_url//\{ver\}/$ver}"
-
-            # 优先尝试指定平台
-            local url="${base_url}?targetPlatform=${platform}"
-            echo "   尝试: $platform"
-            if curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
-                 -o "$outfile" "$url" 2>/dev/null; then
-              return 0
-            fi
-
-            # 回退到 universal（不带 targetPlatform 参数）
-            echo "   回退: universal"
-            if curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
-                 -o "$outfile" "$base_url" 2>/dev/null; then
-              return 0
-            fi
-
-            return 1
-          }
+          # 创建平台文件夹
+          mkdir -p artifacts/win32-x64 artifacts/linux-x64
 
           echo "=========================================="
           echo "下载扩展 VSIX（${#EXTENSIONS[@]} 个 × ${#TARGETS[@]} 平台）..."
           echo "=========================================="
-
-          declare -A UNIVERSAL_CACHE  # universal 包去重
 
           for ext in "${EXTENSIONS[@]}"; do
             IFS='.' read -r pub name <<< "$ext"
@@ -122,22 +98,36 @@ jobs:
             echo ">> [$ext] 版本: $version"
 
             for target in "${TARGETS[@]}"; do
-              outfile="artifacts/${ext}__${target}.vsix"
+              target_dir="artifacts/$target"
+              # 临时文件（避免残留）
+              temp_file="/tmp/${ext}_${target}_${version}.vsix"
 
-              if download_vsix "$pub" "$name" "$version" "$target" "$outfile"; then
-                # 检查是否实际下载到 universal（文件大小与缓存对比去重）
-                size=$(stat -c%s "$outfile" 2>/dev/null || echo 0)
-                cache_key="${ext}_${size}"
+              # 1) 尝试特定平台
+              url_specific="${ASSET_BASE//\{pub\}/$pub}"
+              url_specific="${url_specific//\{name\}/$name}"
+              url_specific="${url_specific//\{ver\}/$version}"
+              url_specific="${url_specific}?targetPlatform=${target}"
+              echo "  尝试 $target 特定版本..."
+              if curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
+                   -o "$temp_file" "$url_specific" 2>/dev/null; then
+                final_file="$target_dir/${ext}_${target}_${version}.vsix"
+                mv "$temp_file" "$final_file"
+                echo "  下载成功: $final_file"
+                du -h "$final_file"
+                continue
+              fi
 
-                if [ -n "${UNIVERSAL_CACHE[$cache_key]:-}" ]; then
-                  # 同大小 = 大概率是同一个 universal 包，用缓存覆盖
-                  echo "   复用 universal 包（与 ${UNIVERSAL_CACHE[$cache_key]} 相同）"
-                  cp "artifacts/${UNIVERSAL_CACHE[$cache_key]}" "$outfile"
-                else
-                  UNIVERSAL_CACHE[$cache_key]="${ext}__${target}.vsix"
-                fi
-
-                du -h "$outfile"
+              # 2) 回退到 universal
+              url_universal="${ASSET_BASE//\{pub\}/$pub}"
+              url_universal="${url_universal//\{name\}/$name}"
+              url_universal="${url_universal//\{ver\}/$version}"
+              echo "  回退到 universal..."
+              if curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 \
+                   -o "$temp_file" "$url_universal" 2>/dev/null; then
+                final_file="$target_dir/${ext}_universal_${version}.vsix"
+                mv "$temp_file" "$final_file"
+                echo "  下载成功: $final_file"
+                du -h "$final_file"
               else
                 echo "!! 下载失败: $ext ($target)"
               fi
@@ -147,7 +137,7 @@ jobs:
           echo "=========================================="
           echo "全部完成！产物列表："
           echo "=========================================="
-          ls -lh artifacts/
+          find artifacts/ -type f -exec ls -lh {} \;
 
       - name: Upload Bundle Artifact
         uses: actions/upload-artifact@v7.0.1
