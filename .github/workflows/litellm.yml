@@ -15,7 +15,8 @@ jobs:
             "docker.litellm.ai/berriai/litellm:main-stable"
             "postgres:16"
             "prom/prometheus"
-            grafana/grafana:latest
+            "grafana/grafana:latest"
+            "redis:latest"
           )
 
           echo "=========================================="
