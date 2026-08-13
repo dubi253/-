@@ -7,10 +7,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-
-      - name: Pull, Measure and Package Images Individually
+      - name: Pull and Package All LiteLLM Images
         run: |
-          # 1. 定义需要下载的特定镜像列表
+          # 定义 LiteLLM 相关的镜像
           IMAGES=(
             "docker.litellm.ai/berriai/litellm:main-stable"
             "postgres:16"
@@ -20,37 +19,33 @@ jobs:
           )
 
           echo "=========================================="
-          echo "开始处理镜像（共 ${#IMAGES[@]} 个）..."
+          echo "1. 开始拉取 LiteLLM 镜像（共 ${#IMAGES[@]} 个）..."
           echo "=========================================="
-
           for img in "${IMAGES[@]}"; do
-            echo "------------------------------------------"
-            echo ">> 正在下载: $img ..."
+            echo "正在下载: $img ..."
             docker pull "$img"
-            
-            # 输出该镜像在 Docker 中的大小
-            echo ">> 镜像下载完成，大小为："
-            docker images --format "{{.Size}}" "$img"
-
-            # 将镜像名称中的 / 和 : 替换为下划线 _，以便作为安全的文件名
-            SAFE_NAME=$(echo "$img" | tr '/:' '__')
-            OUTPUT_NAME="${SAFE_NAME}.tar.gz"
-
-            echo ">> 正在独立打包并压缩: $OUTPUT_NAME ..."
-            docker save "$img" | gzip > "$OUTPUT_NAME"
-
-            echo ">> 打包成功！压缩包实际大小为："
-            du -sh "$OUTPUT_NAME"
           done
-          
+
           echo "=========================================="
-          echo "所有镜像处理完毕！"
+          echo "2. 正在合并打包并进行 gzip 极限压缩..."
+          echo "=========================================="
+          OUTPUT_NAME="litellm-offline-package.tar.gz"
+          STAGING_DIR="$(mktemp -d)"
+          
+          # 将所有镜像保存到一个 tar.gz 文件中
+          docker save "${IMAGES[@]}" | gzip > "$STAGING_DIR/litellm-images.tar.gz"
+
+          # 打包所有内容到最终的归档文件
+          tar -czf "$OUTPUT_NAME" -C "$STAGING_DIR" litellm-images.tar.gz
+
+          echo "=========================================="
+          echo "打包成功！LiteLLM 离线包最终大小为："
+          du -sh "$OUTPUT_NAME"
           echo "=========================================="
 
-      - name: Upload Image Artifacts
+      - name: Upload a Build Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: separate-images-package
-          # 使用通配符匹配所有生成的 tar.gz 文件
-          path: "*.tar.gz"
-          retention-days: 1 # 在 GitHub 上临时保留 1 天
+          path: litellm-offline-package.tar.gz
+          archive: false
+          retention-days: 1 # 在 GitHub 上临时保留 1 天供你点击下载
