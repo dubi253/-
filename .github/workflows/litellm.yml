@@ -11,7 +11,7 @@ jobs:
         run: |
           # 定义 LiteLLM 相关的镜像
           IMAGES=(
-            "docker.litellm.ai/berriai/litellm:main-stable"
+            "ghcr.io/berriai/litellm:latest"
             "postgres:16"
             "prom/prometheus"
             "grafana/grafana:latest"
