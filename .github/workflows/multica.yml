@@ -14,7 +14,7 @@ jobs:
         run: |
           # 定义 Multica 相关的镜像
           IMAGES=(
-            "pgvector/pgvector:pg18"
+            "pgvector/pgvector:pg17"
             "ghcr.io/multica-ai/multica-backend:latest"
             "ghcr.io/multica-ai/multica-web:latest"
           )

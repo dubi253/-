@@ -85,9 +85,9 @@ jobs:
           # if ! grep -qxF "redis:alpine" images.txt; then
           #   echo "redis:alpine" >> images.txt
           # fi
-          # if ! grep -qxF "postgres:15-alpine" images.txt; then
-          #   echo "postgres:15-alpine" >> images.txt
-          # fi
+          if ! grep -qxF "pgvector/pgvector:pg18" images.txt; then
+            echo "pgvector/pgvector:pg18" >> images.txt
+          fi
 
           echo "========================================"
           echo "       待拉取镜像列表"
