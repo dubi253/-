@@ -12,7 +12,7 @@ jobs:
           # 定义 LiteLLM 相关的镜像
           IMAGES=(
             "ghcr.io/berriai/litellm:latest"
-            "postgres:16"
+            "postgres:18"
             "prom/prometheus"
             "grafana/grafana:latest"
             "redis:latest"
