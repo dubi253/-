@@ -164,27 +164,27 @@ jobs:
       - name: Upload Helm Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: mattermost-helm-chart
           path: ${{ steps.package_chart.outputs.chart_package }}
+          archive: false
           retention-days: 1
 
       - name: Upload Images Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: mattermost-images
           path: mattermost-images.tar.gz
+          archive: false
           retention-days: 1
 
       - name: Upload Patched Repository Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: mattermost-patched-enterprise
           path: mattermost-patched-enterprise.tar.gz
+          archive: false
           retention-days: 1
 
       - name: Upload Deployment Guide Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: deployment-guide-server
           path: deployment-guide-server.tar.gz
+          archive: false
           retention-days: 1
