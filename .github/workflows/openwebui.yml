@@ -206,8 +206,8 @@ jobs:
       - name: Upload Images Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: openwebui-offline-images
           path: openwebui-images.tar.gz
+          archive: false
           retention-days: 1
 
       # ========== 10. 生成部署说明（可选但推荐）==========
