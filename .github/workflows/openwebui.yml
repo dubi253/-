@@ -179,8 +179,8 @@ jobs:
       - name: Upload Helm Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: openwebui-helm-full
           path: openwebui-helm-full.tar.gz
+          archive: false
           retention-days: 1
 
       # ========== 8. 保存所有镜像（包含可能已修改的） ==========
