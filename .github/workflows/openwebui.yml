@@ -17,6 +17,11 @@ jobs:
           # if set to "true" but frees about 6 GB
           tools-cache: false
 
+      - name: Checkout Repository
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+
       # ========== 1. 设置 Kubernetes 工具 ==========
       - name: Setup Kubernetes Tools
         uses: yokawasa/action-setup-kube-tools@v0.14.0
@@ -111,31 +116,39 @@ jobs:
           done
           echo "所有官方镜像拉取完成。"
 
-      # ========== 5. 可选：构建定制镜像（如果需要） ==========
-      # 如果需要修改 Open WebUI 镜像（例如添加依赖或配置），可以在此步骤添加
-      # - name: Build Custom OpenWebUI Image
-      #   run: |
-      #     WEBUI_VERSION="${{ steps.webui_vars.outputs.version }}"
-      #     TARGET_IMAGE="${{ steps.webui_vars.outputs.target_image }}"
-      #
-      #     echo "=========================================="
-      #     echo "正在基于本地官方镜像构建定制版本..."
-      #     echo "目标标签: $TARGET_IMAGE"
-      #     echo "========================================="
-      #
-      #     # 示例：添加 Python 依赖
-      #     cat > Dockerfile.openwebui-custom <<EOF
-      #     FROM ${TARGET_IMAGE}
-      #     USER root
-      #     RUN apt-get update && apt-get install -y --no-install-recommends \
-      #         default-libmysqlclient-dev pkg-config gcc g++ \
-      #         && rm -rf /var/lib/apt/lists/*
-      #     USER openwebui
-      #     RUN pip install --no-cache-dir pydoris mysqlclient
-      #     EOF
-      #
-      #     docker build -f Dockerfile.openwebui-custom -t "$TARGET_IMAGE" .
-      #     echo "定制镜像构建完成，已覆盖原镜像标签: $TARGET_IMAGE"
+      # ========== 5. 构建离线增强版 Open WebUI 镜像 ==========
+      - name: Build Offline-ready OpenWebUI Image
+        run: |
+          WEBUI_VERSION="${{ steps.webui_vars.outputs.version }}"
+          TARGET_IMAGE="${{ steps.webui_vars.outputs.target_image }}"
+
+          if [ -z "$WEBUI_VERSION" ] || [ -z "$TARGET_IMAGE" ]; then
+            echo "Error: WEBUI_VERSION 或 TARGET_IMAGE 为空"
+            exit 1
+          fi
+
+          # 确保目标镜像会被后续 docker save 打包
+          if ! grep -qxF "$TARGET_IMAGE" images.txt; then
+            echo "警告: images.txt 中未包含 $TARGET_IMAGE，已自动追加"
+            echo "$TARGET_IMAGE" >> images.txt
+          fi
+
+          echo "=========================================="
+          echo "正在构建离线增强版 Open WebUI 镜像..."
+          echo "Helm 版本: $WEBUI_VERSION"
+          echo "基础镜像: $TARGET_IMAGE"
+          echo "输出标签: $TARGET_IMAGE"
+          echo "=========================================="
+
+          docker build \
+            --pull=false \
+            --build-arg BASE_IMAGE="$TARGET_IMAGE" \
+            -f open-webui/Dockerfile \
+            -t "$TARGET_IMAGE" \
+            open-webui
+
+          docker image inspect "$TARGET_IMAGE" >/dev/null
+          echo "定制镜像构建完成，已覆盖标签: $TARGET_IMAGE"
 
       # ========== 6. 打包完整的 Helm Chart ==========
       - name: Package Full Helm Chart
