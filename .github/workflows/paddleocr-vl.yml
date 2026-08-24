@@ -16,6 +16,14 @@ jobs:
           curl -L -o compose.yaml "$COMPOSE_URL"
           curl -L -o .env "$ENV_URL"
 
+          echo "2. 将 VLM_BACKEND 修改为 sglang..."
+          # 使用 sed 进行原地替换（-i），将 vllm 替换为 sglang
+          sed -i 's/VLM_BACKEND=vllm/VLM_BACKEND=sglang/g' .env
+
+          # 打印确认修改成功
+          echo "当前 .env 文件内容："
+          cat .env
+
       - name: Pull Images via Docker Compose
         run: |
           echo "=========================================="
