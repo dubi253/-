@@ -1,0 +1,68 @@
+name: Download PaddleOCR Offline Images Suite
+
+on:
+  workflow_dispatch: # 支持在 GitHub Action 页面手动点击按钮触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Configs
+        run: |
+          COMPOSE_URL="https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/refs/heads/main/deploy/paddleocr_vl_docker/accelerators/nvidia-gpu/compose.yaml"
+          ENV_URL="https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/refs/heads/main/deploy/paddleocr_vl_docker/accelerators/nvidia-gpu/.env"
+
+          echo "1. 下载 compose.yaml 和 .env 文件..."
+          curl -L -o compose.yaml "$COMPOSE_URL"
+          curl -L -o .env "$ENV_URL"
+
+      - name: Pull Images via Docker Compose
+        run: |
+          echo "=========================================="
+          echo "2. 使用 docker compose pull 拉取镜像..."
+          echo "=========================================="
+          # 使用 -f 指定配置文件，docker compose 会自动读取同目录下的 .env
+          docker compose -f compose.yaml pull
+
+      - name: Package Images and Configs
+        run: |
+          echo "=========================================="
+          echo "3. 获取已拉取的镜像列表并打包..."
+          echo "=========================================="
+          
+          # 使用 docker compose images 获取准确的镜像全名（包含 tag）
+          # --quiet 参数只输出镜像 ID/名称，不输出表格头
+          mapfile -t IMAGES < <(docker compose -f compose.yaml images --quiet)
+          
+          if [ ${#IMAGES[@]} -eq 0 ]; then
+            echo "错误：未获取到任何已拉取的镜像。"
+            exit 1
+          fi
+
+          echo "准备打包以下镜像："
+          printf '%s\n' "${IMAGES[@]}"
+
+          OUTPUT_NAME="paddleocr-offline-package.tar.gz"
+          STAGING_DIR="$(mktemp -d)"
+
+          # 保存所有镜像到一个 tar 文件并压缩
+          docker save "${IMAGES[@]}" | gzip > "$STAGING_DIR/paddleocr-images.tar.gz"
+
+          # 将下载的配置文件移动到暂存目录
+          mv compose.yaml "$STAGING_DIR/compose.yaml"
+          mv .env "$STAGING_DIR/.env"
+
+          # 将所有文件打包成最终的 tar.gz
+          tar -czf "$OUTPUT_NAME" -C "$STAGING_DIR" paddleocr-images.tar.gz compose.yaml .env
+
+          echo "=========================================="
+          echo "打包成功！离线包最终大小为："
+          du -sh "$OUTPUT_NAME"
+          echo "=========================================="
+
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          path: paddleocr-offline-package.tar.gz
+          archive: false
+          retention-days: 1 # 在 GitHub 上临时保留 1 天供你点击下载
