@@ -21,7 +21,7 @@ jobs:
           echo "=========================================="
           echo "2. 使用 docker compose pull 拉取镜像..."
           echo "=========================================="
-          # 使用 -p 指定项目名称为 paddleocr
+          # 显式指定项目名称，避免 project name must not be empty 错误
           docker compose -p paddleocr -f compose.yaml pull
 
       - name: Package Images and Configs
@@ -30,8 +30,9 @@ jobs:
           echo "3. 获取已拉取的镜像列表并打包..."
           echo "=========================================="
           
-          # 同样需要加上 -p 参数，以确保获取到正确的项目镜像
-          mapfile -t IMAGES < <(docker compose -p paddleocr -f compose.yaml images --quiet)
+          # 核心修改：使用 config --images 解析镜像列表，而不是 images --quiet
+          # config --images 仅解析配置文件，不需要容器处于运行状态
+          mapfile -t IMAGES < <(docker compose -p paddleocr -f compose.yaml config --images)
           
           if [ ${#IMAGES[@]} -eq 0 ]; then
             echo "错误：未获取到任何已拉取的镜像。"
