@@ -29,6 +29,7 @@ jobs:
           echo "=========================================="
           echo "3. 获取已拉取的镜像列表并打包..."
           echo "=========================================="
+          OUTPUT_NAME="paddleocr-images.tar.gz"
           
           # 核心修改：使用 config --images 解析镜像列表，而不是 images --quiet
           # config --images 仅解析配置文件，不需要容器处于运行状态
@@ -42,27 +43,32 @@ jobs:
           echo "准备打包以下镜像："
           printf '%s\n' "${IMAGES[@]}"
 
-          OUTPUT_NAME="paddleocr-offline-package.tar.gz"
-          STAGING_DIR="$(mktemp -d)"
-
-          # 保存所有镜像到一个 tar 文件并压缩
-          docker save "${IMAGES[@]}" | gzip > "$STAGING_DIR/paddleocr-images.tar.gz"
-
-          # 将下载的配置文件移动到暂存目录
-          mv compose.yaml "$STAGING_DIR/compose.yaml"
-          mv .env "$STAGING_DIR/.env"
-
-          # 将所有文件打包成最终的 tar.gz
-          tar -czf "$OUTPUT_NAME" -C "$STAGING_DIR" paddleocr-images.tar.gz compose.yaml .env
+          # 保存所有镜像到一个 tar 文件并分片压缩
+          docker save "${IMAGES[@]}" | gzip | split -b 4900M -d - "$OUTPUT_NAME.part"
 
           echo "=========================================="
-          echo "打包成功！离线包最终大小为："
-          du -sh "$OUTPUT_NAME"
+          echo "打包分片成功！离线包总大小为："
+          du -sh "$OUTPUT_NAME".part*
           echo "=========================================="
+          echo "分片文件列表："
+          ls -lh "$OUTPUT_NAME".part*
+          echo "=========================================="
+          echo "加载镜像命令（在目标机器上执行）："
+          echo "  cat $OUTPUT_NAME.part* | docker load"
+          echo "=========================================="
+
+          # 将docker compose文件打包成最终的 tar.gz
+          tar -czf paddleocr-docker-compose.tar.gz compose.yaml .env
 
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          path: paddleocr-offline-package.tar.gz
+          path: paddleocr-docker-compose.tar.gz
           archive: false
-          retention-days: 1 # 在 GitHub 上临时保留 1 天供你点击下载
+          retention-days: 1
+
+      - name: Upload Artifact to GitHub
+        uses: dubi253/upload-artifacts@v1.0.7
+        with:
+          path: paddleocr-images.tar.gz.part*
+          archive: false
