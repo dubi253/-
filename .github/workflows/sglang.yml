@@ -18,10 +18,9 @@ jobs:
       - name: Pull and Package Images
         run: |
           IMAGES=(
-            "lmsysorg/sglang:latest-cu130-runtime"
-            # "lmsysorg/sglang:latest-cu129-runtime"
+            "lmsysorg/sglang:qwen38flashnext"
           )
-          OUTPUT_NAME="sglang-images-cu130.tar.gz"
+          OUTPUT_NAME="sglang-images-cu130-qwen38flashnext.tar.gz"
 
           echo "=========================================="
           echo "1. 开始拉取 SGLang 镜像（共 ${#IMAGES[@]} 个）..."
@@ -50,4 +49,4 @@ jobs:
       - name: Upload Artifact to GitHub
         uses: dubi253/upload-artifacts@v1.0.7
         with:
-          path: sglang-images-cu130.tar.gz.part*
+          path: sglang-images-cu130-qwen38flashnext.tar.gz.part*
