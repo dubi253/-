@@ -18,9 +18,9 @@ jobs:
       - name: Pull and Package Images
         run: |
           IMAGES=(
-            "lmsysorg/sglang:glm-5.3-flash"
+            "lmsysorg/sglang:latest-runtime"
           )
-          OUTPUT_NAME="sglang-images-cu130-glm-5.3-flash.tar.gz"
+          OUTPUT_NAME="sglang-images.tar.gz"
 
           echo "=========================================="
           echo "1. 开始拉取 SGLang 镜像（共 ${#IMAGES[@]} 个）..."
@@ -49,4 +49,4 @@ jobs:
       - name: Upload Artifact to GitHub
         uses: dubi253/upload-artifacts@v1.0.7
         with:
-          path: sglang-images-cu130-glm-5.3-flash.tar.gz.part*
+          path: sglang-images.tar.gz.part*
