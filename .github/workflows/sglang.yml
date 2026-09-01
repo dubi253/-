@@ -18,9 +18,9 @@ jobs:
       - name: Pull and Package Images
         run: |
           IMAGES=(
-            "lmsysorg/sglang:dev-cu13"
+            "lmsysorg/sglang:dev-dsv4-flash-vision"
           )
-          OUTPUT_NAME="sglang-images-dev-cu13.tar.gz"
+          OUTPUT_NAME="sglang-images-dev-dsv4-flash-vision.tar.gz"
 
           echo "=========================================="
           echo "1. 开始拉取 SGLang 镜像（共 ${#IMAGES[@]} 个）..."
@@ -49,4 +49,4 @@ jobs:
       - name: Upload Artifact to GitHub
         uses: dubi253/upload-artifacts@v1.0.7
         with:
-          path: sglang-images-dev-cu13.tar.gz.part*
+          path: sglang-images-dev-dsv4-flash-vision.tar.gz.part*
