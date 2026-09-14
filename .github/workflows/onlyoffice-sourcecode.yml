@@ -1,0 +1,36 @@
+name: Clone and Package ONLYOFFICE DocumentServer
+
+on:
+  workflow_dispatch: # 支持在 GitHub Actions 页面手动触发
+  push:
+    branches:
+      - main
+
+jobs:
+  clone-and-package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone Repository with Submodules
+        run: |
+          echo "Cloning DocumentServer with depth=1 and recursive submodules..."
+          git clone --depth=1 --recurse-submodules https://github.com/ONLYOFFICE/DocumentServer.git
+          
+          # 可选：检查子模块状态
+          cd DocumentServer
+          git submodule status
+
+      - name: Package to tar.gz
+        run: |
+          echo "Compressing DocumentServer directory into document-server.tar.gz..."
+          tar -czf document-server.tar.gz DocumentServer/
+          
+          # 查看打包后文件大小
+          ls -lh document-server.tar.gz
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          path: document-server.tar.gz
+          retention-days: 1
+          archive: false
