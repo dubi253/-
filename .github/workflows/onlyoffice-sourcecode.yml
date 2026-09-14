@@ -1,10 +1,7 @@
 name: Clone and Package ONLYOFFICE DocumentServer
 
 on:
-  workflow_dispatch: # 支持在 GitHub Actions 页面手动触发
-  push:
-    branches:
-      - main
+  workflow_dispatch: 
 
 jobs:
   clone-and-package:
