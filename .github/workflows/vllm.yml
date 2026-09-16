@@ -18,9 +18,9 @@ jobs:
       - name: Pull and Package Images
         run: |
           IMAGES=(
-            "vllm/vllm-openai:deepseekv4-flash-vision"
+            "vllm/vllm-openai:nightly"
           )
-          OUTPUT_NAME="vllm-images-deepseekv4-flash-vision.tar.gz"
+          OUTPUT_NAME="vllm-images-nightly.tar.gz"
 
           echo "=========================================="
           echo "1. 开始拉取 vLLM 镜像（共 ${#IMAGES[@]} 个）..."
@@ -49,4 +49,4 @@ jobs:
       - name: Upload Artifact to GitHub
         uses: dubi253/upload-artifacts@v1.0.7
         with:
-          path: vllm-images-deepseekv4-flash-vision.tar.gz.part*
+          path: vllm-images-nightly.tar.gz.part*
