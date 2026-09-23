@@ -15,8 +15,9 @@ jobs:
             "kjlion/arena-brawl:latest"
             "kjlion/bomb-party:latest"
             "kjlion/ice-climber-arena:latest"
-            "24-alpine"
-            "20-alpine"
+            "systemsome/80h5:26.02.07"
+            "node:24-alpine"
+            "node:20-alpine"
           )
 
           echo "=========================================="
