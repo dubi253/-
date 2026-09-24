@@ -17,6 +17,7 @@ jobs:
             "pgvector/pgvector:pg17"
             "ghcr.io/multica-ai/multica-backend:latest"
             "ghcr.io/multica-ai/multica-web:latest"
+            "redis:latest"
           )
 
           echo "=========================================="
