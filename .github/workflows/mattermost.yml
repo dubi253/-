@@ -55,6 +55,9 @@ jobs:
           echo "添加 PostgreSQL 镜像: postgres:18"
           echo "postgres:18" >> images_list.txt
 
+          echo "添加 elasticsearch 镜像: elasticsearch:9.5.3"
+          echo "elasticsearch:9.5.3" >> images_list.txt
+
           # 去重并清理
           sort -u -o images_list.txt images_list.txt
           sed -i '/^$/d' images_list.txt
