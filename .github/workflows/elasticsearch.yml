@@ -1,0 +1,38 @@
+name: Download Elasticsearch Offline Images Suite
+
+on:
+  workflow_dispatch: # 支持在 GitHub Action 页面手动点击按钮触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull and Package Elasticsearch Image
+        run: |
+          # 定义 Elasticsearch 镜像
+          IMAGES=(
+            "elasticsearch:8.19.23"
+          )
+          echo "=========================================="
+          echo "1. 开始拉取 Elasticsearch 镜像（共 ${#IMAGES[@]} 个）..."
+          echo "=========================================="
+          for img in "${IMAGES[@]}"; do
+            echo "正在下载: $img ..."
+            docker pull "$img"
+          done
+          echo "=========================================="
+          echo "2. 正在合并打包并进行 gzip 极限压缩..."
+          echo "=========================================="
+          OUTPUT_NAME="elasticsearch-image.tar.gz"
+          docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
+          
+          echo "=========================================="
+          echo "打包成功！Elasticsearch 离线包最终大小为："
+          du -sh "$OUTPUT_NAME"
+          echo "=========================================="
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          path: elasticsearch-image.tar.gz
+          archive: false
+          retention-days: 1
