@@ -2,19 +2,28 @@ name: Download Elasticsearch Offline Images Suite
 
 on:
   workflow_dispatch: # 支持在 GitHub Action 页面手动点击按钮触发
+    inputs:
+      es_version:
+        description: 'Elasticsearch 版本号（例如 8.19.23）'
+        required: true
+        default: '8.19.23'
+        type: string
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ES_VERSION: ${{ inputs.es_version }}
     steps:
       - name: Pull and Package Elasticsearch Image
         run: |
+          set -euo pipefail
           # 定义 Elasticsearch 镜像
           IMAGES=(
-            "elasticsearch:8.19.23"
+            "elasticsearch:${ES_VERSION}"
           )
           echo "=========================================="
-          echo "1. 开始拉取 Elasticsearch 镜像（共 ${#IMAGES[@]} 个）..."
+          echo "1. 开始拉取 Elasticsearch ${ES_VERSION} 镜像（共 ${#IMAGES[@]} 个）..."
           echo "=========================================="
           for img in "${IMAGES[@]}"; do
             echo "正在下载: $img ..."
@@ -23,16 +32,51 @@ jobs:
           echo "=========================================="
           echo "2. 正在合并打包并进行 gzip 极限压缩..."
           echo "=========================================="
-          OUTPUT_NAME="elasticsearch-image.tar.gz"
-          docker save "${IMAGES[@]}" | gzip > "$OUTPUT_NAME"
-          
+          OUTPUT_NAME="elasticsearch-${ES_VERSION}-image.tar.gz"
+          docker save "${IMAGES[@]}" | gzip -9 > "$OUTPUT_NAME"
+
           echo "=========================================="
           echo "打包成功！Elasticsearch 离线包最终大小为："
           du -sh "$OUTPUT_NAME"
           echo "=========================================="
-      - name: Upload a Build Artifact
+
+      - name: Download Elasticsearch Plugins
+        run: |
+          set -euo pipefail
+          mkdir -p plugins
+          # 需要下载的插件列表，按需增删
+          PLUGINS=(
+            "analysis-smartcn"
+            "analysis-icu"
+          )
+          for plugin in "${PLUGINS[@]}"; do
+            URL="https://artifacts.elastic.co/downloads/elasticsearch-plugins/${plugin}/${plugin}-${ES_VERSION}.zip"
+            echo "=========================================="
+            echo "正在下载插件: $plugin (版本 ${ES_VERSION})"
+            echo "URL: $URL"
+            echo "=========================================="
+            # -f: HTTP 错误码时返回非零退出；-S: 显示错误；-L: 跟随重定向；--retry: 失败重试
+            curl -fSL --retry 3 --retry-delay 5 \
+              -o "plugins/${plugin}-${ES_VERSION}.zip" "$URL"
+          done
+          echo "=========================================="
+          echo "插件下载完成，文件列表如下："
+          ls -lh plugins/
+          echo "=========================================="
+
+      - name: Upload Elasticsearch Image Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          path: elasticsearch-image.tar.gz
+          # archive: false 模式下 name 会被忽略，artifact 名称即为上传的文件名
+          path: elasticsearch-${{ env.ES_VERSION }}-image.tar.gz
           archive: false
           retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload Elasticsearch Plugins Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: elasticsearch-${{ env.ES_VERSION }}-plugins
+          path: plugins/*.zip
+          retention-days: 1
+          if-no-files-found: error
