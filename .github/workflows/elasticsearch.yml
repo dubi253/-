@@ -44,21 +44,25 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p plugins
-          # 需要下载的插件列表，按需增删
-          PLUGINS=(
-            "analysis-smartcn"
+          OFFICIAL_PLUGINS=(
             "analysis-icu"
+            "analysis-smartcn"
           )
-          for plugin in "${PLUGINS[@]}"; do
-            URL="https://artifacts.elastic.co/downloads/elasticsearch-plugins/${plugin}/${plugin}-${ES_VERSION}.zip"
-            echo "=========================================="
-            echo "正在下载插件: $plugin (版本 ${ES_VERSION})"
-            echo "URL: $URL"
-            echo "=========================================="
-            # -f: HTTP 错误码时返回非零退出；-S: 显示错误；-L: 跟随重定向；--retry: 失败重试
-            curl -fSL --retry 3 --retry-delay 5 \
-              -o "plugins/${plugin}-${ES_VERSION}.zip" "$URL"
+          COMMUNITY_PLUGINS=(
+            "analysis-ik|https://release.infinilabs.com/analysis-ik/stable/elasticsearch-analysis-ik-${ES_VERSION}.zip"
+            "analysis-pinyin|https://release.infinilabs.com/analysis-pinyin/stable/elasticsearch-analysis-pinyin-${ES_VERSION}.zip"
+          )
+          for p in "${OFFICIAL_PLUGINS[@]}"; do
+            URL="https://artifacts.elastic.co/downloads/elasticsearch-plugins/${p}/${p}-${ES_VERSION}.zip"
+            echo "下载官方插件: $p"
+            curl -fSL --retry 3 -o "plugins/${p}-${ES_VERSION}.zip" "$URL"
           done
+          for item in "${COMMUNITY_PLUGINS[@]}"; do
+            p="${item%%|*}"; URL="${item##*|}"
+            echo "下载社区插件: $p"
+            curl -fSL --retry 3 -o "plugins/${p}-${ES_VERSION}.zip" "$URL"
+          done
+          
           echo "=========================================="
           echo "插件下载完成，文件列表如下："
           ls -lh plugins/
