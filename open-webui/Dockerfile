@@ -35,7 +35,7 @@ ENV LANG=zh_CN.UTF-8 \
     LC_ALL=zh_CN.UTF-8
 
 # 2. 使用 uv 包管理器安装 Python 解析依赖
-RUN uv pip install --system --no-cache-dir \
+RUN pip install --no-cache-dir \
     unstructured \
     python-magic \
     pdf2image \
@@ -47,7 +47,11 @@ RUN uv pip install --system --no-cache-dir \
     openpyxl \
     markdown \
     beautifulsoup4 \
-    chardet
+    chardet \
+    spacy
+
+RUN python -m spacy download zh_core_web_sm
+RUN python -m spacy download en_core_web_sm
 
 # 切回默认非 root 用户
 USER 1000:1000
