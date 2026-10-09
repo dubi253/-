@@ -69,14 +69,13 @@ jobs:
           echo "2. 生成 Dockerfile 并构建含插件的镜像 ..."
           echo "=========================================="
 
-          # 动态生成 Dockerfile：为每个插件 zip 生成一条 COPY + 一段 RUN 安装命令
+          # 动态生成 Dockerfile：COPY 源路径带上 plugins/ 前缀
           {
             echo "FROM elasticsearch:${ES_VERSION}"
             for zip in plugins/*.zip; do
               zip_name=$(basename "$zip")
-              echo "COPY ${zip_name} /tmp/${zip_name}"
+              echo "COPY plugins/${zip_name} /tmp/${zip_name}"
             done
-            # 一条 RUN 内完成全部安装并清理，减少镜像层数
             echo -n "RUN"
             first=true
             for zip in plugins/*.zip; do
@@ -104,6 +103,7 @@ jobs:
           echo "=========================================="
           docker run --rm --entrypoint /usr/share/elasticsearch/bin/elasticsearch-plugin \
             "$FINAL_IMAGE" list
+
 
       - name: Package Final Image
         run: |
