@@ -1,7 +1,7 @@
 name: Download Elasticsearch Offline Images Suite
 
 on:
-  workflow_dispatch: # 支持在 GitHub Action 页面手动点击按钮触发
+  workflow_dispatch:
     inputs:
       es_version:
         description: 'Elasticsearch 版本号（例如 8.19.23）'
@@ -13,6 +13,29 @@ on:
         required: false
         default: true
         type: boolean
+      # 新增：自定义词典来源 URL（多个用分号分隔），留空则跳过词典下载
+      ik_dict_urls:
+        description: 'IK 自定义词典 URL 列表（分号分隔，UTF-8 每行一词）'
+        required: false
+        default: ''
+        type: string
+      # 新增：IK 停用词词典 URL，留空则跳过
+      ik_stopwords_urls:
+        description: 'IK 停用词词典 URL 列表（分号分隔）'
+        required: false
+        default: ''
+        type: string
+      # 新增：可选的远程热更端点，留空则只打包本地词典
+      ik_remote_ext_dict:
+        description: '可选：运行时 remote_ext_dict 的 HTTPS URL（热更）'
+        required: false
+        default: ''
+        type: string
+      ik_remote_ext_stopwords:
+        description: '可选：运行时 remote_ext_stopwords 的 HTTPS URL（热更）'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   build:
@@ -20,6 +43,9 @@ jobs:
     env:
       ES_VERSION: ${{ inputs.es_version }}
       FINAL_IMAGE: elasticsearch:${{ inputs.es_version }}-with-plugins
+      # IK 配置统一放在这个目录，ES 启动时 IK 会优先从 {conf}/analysis-ik/ 加载
+      IK_CONFIG_DIR: ik-config/analysis-ik
+
     steps:
       - name: Pull Base Elasticsearch Image
         run: |
@@ -33,7 +59,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p plugins
-          # 官方插件：URL 规律固定
           OFFICIAL_PLUGINS=(
             "analysis-icu"
             "analysis-smartcn"
@@ -44,7 +69,6 @@ jobs:
             curl -fSL --retry 3 --retry-delay 5 -o "plugins/${p}-${ES_VERSION}.zip" "$URL"
           done
 
-          # 社区插件（INFINI Labs 维护），URL 前缀不同
           if [ "${{ inputs.include_community_plugins }}" = "true" ]; then
             declare -A COMMUNITY_PLUGINS=(
               ["analysis-ik"]="https://release.infinilabs.com/analysis-ik/stable/elasticsearch-analysis-ik-${ES_VERSION}.zip"
@@ -62,20 +86,140 @@ jobs:
           ls -lh plugins/
           echo "=========================================="
 
+      # ============ 新增 Step A：下载并校验 IK 词典 ============
+      - name: Download And Verify IK Dictionaries
+        if: ${{ inputs.include_community_plugins == true }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${IK_CONFIG_DIR}/custom"
+
+          download_and_verify() {
+            local url="$1"
+            local filename
+            filename=$(basename "${url%%\?*}")
+            # 防止重名冲突
+            local target="${IK_CONFIG_DIR}/custom/${filename}"
+            local idx=0
+            while [ -e "$target" ]; do
+              idx=$((idx+1))
+              target="${IK_CONFIG_DIR}/custom/${filename%.dic}_${idx}.dic"
+            done
+
+            echo "下载词典: $url"
+            curl -fSL --retry 3 --retry-delay 5 --connect-timeout 30 -o "$target" "$url"
+
+            # --- 校验 1：非空 ---
+            if [ ! -s "$target" ]; then
+              echo "::error::词典文件为空: $url"
+              exit 1
+            fi
+
+            # --- 校验 2：UTF-8 可解码且非二进制 ---
+            if ! iconv -f UTF-8 -t UTF-8 "$target" >/dev/null 2>&1; then
+              echo "::error::词典文件不是 UTF-8 编码: $target"
+              exit 1
+            fi
+
+            # --- 校验 3：行数 > 0（防止下载到的是 404 HTML 等异常内容）---
+            local lines
+            lines=$(wc -l < "$target")
+            if [ "$lines" -lt 1 ]; then
+              echo "::error::词典文件行数异常: $target"
+              exit 1
+            fi
+
+            echo "✓ 词典校验通过: $target (lines=$lines, size=$(du -h "$target" | cut -f1))"
+          }
+
+          # 主词典
+          if [ -n "${{ inputs.ik_dict_urls }}" ]; then
+            IFS=';' read -ra DICT_URLS <<< "${{ inputs.ik_dict_urls }}"
+            for u in "${DICT_URLS[@]}"; do
+              [ -n "$u" ] && download_and_verify "$u"
+            done
+          fi
+
+          # 停用词词典
+          if [ -n "${{ inputs.ik_stopwords_urls }}" ]; then
+            IFS=';' read -ra STOP_URLS <<< "${{ inputs.ik_stopwords_urls }}"
+            for u in "${STOP_URLS[@]}"; do
+              [ -n "$u" ] && download_and_verify "$u"
+            done
+          fi
+
+          echo "=========================================="
+          echo "IK 词典下载完成，文件列表："
+          ls -lh "${IK_CONFIG_DIR}/custom/"
+          echo "=========================================="
+
+      # ============ 新增 Step B：生成 IKAnalyzer.cfg.xml ============
+      - name: Generate IKAnalyzer.cfg.xml
+        if: ${{ inputs.include_community_plugins == true }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${IK_CONFIG_DIR}"
+
+          # 收集 custom 目录下的词典文件名（分号拼接）
+          EXT_DICT=""
+          if compgen -G "${IK_CONFIG_DIR}/custom/*.dic" > /dev/null; then
+            # 仅取主词典（排除停用词），通过文件名约定或直接全部纳入 ext_dict
+            for f in "${IK_CONFIG_DIR}/custom/"*.dic; do
+              name=$(basename "$f")
+              if [ -z "$EXT_DICT" ]; then EXT_DICT="$name"; else EXT_DICT="${EXT_DICT};${name}"; fi
+            done
+          fi
+
+          REMOTE_EXT="${{ inputs.ik_remote_ext_dict }}"
+          REMOTE_EXT_STOP="${{ inputs.ik_remote_ext_stopwords }}"
+
+          cat > "${IK_CONFIG_DIR}/IKAnalyzer.cfg.xml" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE properties SYSTEM "http://java.sun.com/dtd/properties.dtd">
+          <properties>
+            <comment>IK Analyzer 扩展配置 (由 GitHub Actions 在打包时生成)</comment>
+            <!-- 本地扩展词典，相对路径相对于本文件所在目录 -->
+            <entry key="ext_dict">${EXT_DICT}</entry>
+            <entry key="ext_stopwords"></entry>
+            <!-- 远程热更词典：仅在 inputs.ik_remote_ext_dict 非空时写入；为空则注释掉，避免离线环境反复失败 -->
+            $(if [ -n "$REMOTE_EXT" ]; then
+                echo "<entry key=\"remote_ext_dict\">${REMOTE_EXT}</entry>"
+              else
+                echo "<!-- <entry key=\"remote_ext_dict\"></entry> -->"
+              fi)
+            $(if [ -n "$REMOTE_EXT_STOP" ]; then
+                echo "<entry key=\"remote_ext_stopwords\">${REMOTE_EXT_STOP}</entry>"
+              else
+                echo "<!-- <entry key=\"remote_ext_stopwords\"></entry> -->"
+              fi)
+          </properties>
+          EOF
+
+          echo "---------- 生成的 IKAnalyzer.cfg.xml ----------"
+          cat "${IK_CONFIG_DIR}/IKAnalyzer.cfg.xml"
+          echo "-----------------------------------------------"
+
       - name: Build Custom Image with Plugins
         run: |
           set -euo pipefail
           echo "=========================================="
-          echo "2. 生成 Dockerfile 并构建含插件的镜像 ..."
+          echo "2. 生成 Dockerfile 并构建含插件和词典的镜像 ..."
           echo "=========================================="
 
-          # 动态生成 Dockerfile：COPY 加 --chown，确保 elasticsearch 用户能删除 zip
           {
             echo "FROM elasticsearch:${ES_VERSION}"
+
+            # COPY 插件 zip
             for zip in plugins/*.zip; do
               zip_name=$(basename "$zip")
               echo "COPY --chown=elasticsearch:elasticsearch plugins/${zip_name} /tmp/${zip_name}"
             done
+
+            # 新增：COPY IK 配置目录（含词典），目标是 ES 的 config/analysis-ik/
+            # 这是 IK 官方推荐的优先加载路径，可覆盖插件自带的默认词典
+            if [ -d "${IK_CONFIG_DIR}" ]; then
+              echo "COPY --chown=elasticsearch:elasticsearch ${IK_CONFIG_DIR}/ /usr/share/elasticsearch/config/analysis-ik/"
+            fi
+
             echo -n "RUN"
             first=true
             for zip in plugins/*.zip; do
@@ -90,6 +234,9 @@ jobs:
               fi
             done
             echo " && rm -f /tmp/*.zip"
+
+            # 安装完成后做权限兜底，防止 config/analysis-ik 下属主不对
+            echo "RUN chown -R elasticsearch:elasticsearch /usr/share/elasticsearch/config/analysis-ik || true"
           } > Dockerfile
 
           echo "---------- 生成的 Dockerfile ----------"
@@ -104,13 +251,66 @@ jobs:
           docker run --rm --entrypoint /usr/share/elasticsearch/bin/elasticsearch-plugin \
             "$FINAL_IMAGE" list
 
+      # ============ 新增 Step C：镜像内验证 IK 词典 ============
+      - name: Verify IK Dictionaries In Final Image
+        if: ${{ inputs.include_community_plugins == true }}
+        run: |
+          set -euo pipefail
+          echo "=========================================="
+          echo "3. 验证镜像内 IK 配置与词典文件 ..."
+          echo "=========================================="
 
+          # 3.1 检查 IKAnalyzer.cfg.xml 存在且非空
+          docker run --rm --entrypoint /bin/bash "$FINAL_IMAGE" -c '
+            set -euo pipefail
+            CFG="/usr/share/elasticsearch/config/analysis-ik/IKAnalyzer.cfg.xml"
+            if [ ! -s "$CFG" ]; then
+              echo "::error::IKAnalyzer.cfg.xml 缺失或为空"
+              exit 1
+            fi
+            echo "----- IKAnalyzer.cfg.xml 内容 -----"
+            cat "$CFG"
+            echo "-----------------------------------"
+
+            # 3.2 检查自定义词典文件至少 1 个且非空
+            DICT_DIR="/usr/share/elasticsearch/config/analysis-ik/custom"
+            if [ ! -d "$DICT_DIR" ]; then
+              echo "::warning::未发现自定义词典目录 $DICT_DIR (可能本次构建未提供 ik_dict_urls)"
+              exit 0
+            fi
+            count=0
+            for f in "$DICT_DIR"/*.dic; do
+              [ -e "$f" ] || continue
+              count=$((count+1))
+              if [ ! -s "$f" ]; then
+                echo "::error::镜像内词典文件为空: $f"
+                exit 1
+              fi
+              echo "✓ $(basename "$f") size=$(du -h "$f" | cut -f1) lines=$(wc -l < "$f")"
+            done
+            if [ "$count" -eq 0 ]; then
+              echo "::warning::未发现任何 .dic 词典文件"
+            else
+              echo "✓ 共校验 $count 个词典文件"
+            fi
+
+            # 3.3 检查属主为 elasticsearch，否则启动后 IK 可能读不到
+            owner=$(stat -c "%U:%G" "$CFG")
+            if [ "$owner" != "elasticsearch:elasticsearch" ]; then
+              echo "::error::IK 配置文件属主异常: $owner"
+              exit 1
+            fi
+          '
+
+          echo "=========================================="
+          echo "IK 词典验证通过 ✓"
+          echo "=========================================="
 
       - name: Package Final Image
         run: |
           set -euo pipefail
           echo "=========================================="
-          echo "3. 导出镜像并 gzip 极限压缩..."
+          echo "4. 导出镜像并 gzip 极限压缩..."
           echo "=========================================="
           OUTPUT_NAME="elasticsearch-${ES_VERSION}-with-plugins.tar.gz"
           docker save "$FINAL_IMAGE" | gzip -9 > "$OUTPUT_NAME"
