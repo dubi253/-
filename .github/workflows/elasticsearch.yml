@@ -69,12 +69,12 @@ jobs:
           echo "2. 生成 Dockerfile 并构建含插件的镜像 ..."
           echo "=========================================="
 
-          # 动态生成 Dockerfile：COPY 源路径带上 plugins/ 前缀
+          # 动态生成 Dockerfile：COPY 加 --chown，确保 elasticsearch 用户能删除 zip
           {
             echo "FROM elasticsearch:${ES_VERSION}"
             for zip in plugins/*.zip; do
               zip_name=$(basename "$zip")
-              echo "COPY plugins/${zip_name} /tmp/${zip_name}"
+              echo "COPY --chown=elasticsearch:elasticsearch plugins/${zip_name} /tmp/${zip_name}"
             done
             echo -n "RUN"
             first=true
@@ -103,6 +103,7 @@ jobs:
           echo "=========================================="
           docker run --rm --entrypoint /usr/share/elasticsearch/bin/elasticsearch-plugin \
             "$FINAL_IMAGE" list
+
 
 
       - name: Package Final Image
