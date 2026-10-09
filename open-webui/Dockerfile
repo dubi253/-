@@ -34,7 +34,8 @@ ENV LANG=zh_CN.UTF-8 \
     LANGUAGE=zh_CN:zh \
     LC_ALL=zh_CN.UTF-8
 
-# 2. 使用 uv 包管理器安装 Python 解析依赖
+# 2. 安装 Python 解析依赖
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir \
     unstructured \
     python-magic \
