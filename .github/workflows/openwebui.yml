@@ -10,12 +10,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Disk Space Reclaimer
-        uses: insightsengineering/disk-space-reclaimer@v1.1.2
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tools-cache: false
+      # - name: Disk Space Reclaimer
+      #   uses: insightsengineering/disk-space-reclaimer@v1.1.2
+      #   with:
+      #     # this might remove tools that are actually needed,
+      #     # if set to "true" but frees about 6 GB
+      #     tools-cache: false
 
       - name: Checkout Repository
         uses: actions/checkout@v7.0.1
