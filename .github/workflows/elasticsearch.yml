@@ -8,79 +8,121 @@ on:
         required: true
         default: '8.19.23'
         type: string
+      include_community_plugins:
+        description: '是否包含社区插件（IK 分词、拼音）'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
       ES_VERSION: ${{ inputs.es_version }}
+      FINAL_IMAGE: elasticsearch:${{ inputs.es_version }}-with-plugins
     steps:
-      - name: Pull and Package Elasticsearch Image
+      - name: Pull Base Elasticsearch Image
         run: |
           set -euo pipefail
-          # 定义 Elasticsearch 镜像
-          IMAGES=(
-            "elasticsearch:${ES_VERSION}"
-          )
           echo "=========================================="
-          echo "1. 开始拉取 Elasticsearch ${ES_VERSION} 镜像（共 ${#IMAGES[@]} 个）..."
+          echo "1. 拉取基础镜像 elasticsearch:${ES_VERSION} ..."
           echo "=========================================="
-          for img in "${IMAGES[@]}"; do
-            echo "正在下载: $img ..."
-            docker pull "$img"
-          done
-          echo "=========================================="
-          echo "2. 正在合并打包并进行 gzip 极限压缩..."
-          echo "=========================================="
-          OUTPUT_NAME="elasticsearch-${ES_VERSION}-image.tar.gz"
-          docker save "${IMAGES[@]}" | gzip -9 > "$OUTPUT_NAME"
-
-          echo "=========================================="
-          echo "打包成功！Elasticsearch 离线包最终大小为："
-          du -sh "$OUTPUT_NAME"
-          echo "=========================================="
+          docker pull "elasticsearch:${ES_VERSION}"
 
       - name: Download Elasticsearch Plugins
         run: |
           set -euo pipefail
           mkdir -p plugins
+          # 官方插件：URL 规律固定
           OFFICIAL_PLUGINS=(
             "analysis-icu"
             "analysis-smartcn"
           )
-          COMMUNITY_PLUGINS=(
-            "analysis-ik|https://release.infinilabs.com/analysis-ik/stable/elasticsearch-analysis-ik-${ES_VERSION}.zip"
-            "analysis-pinyin|https://release.infinilabs.com/analysis-pinyin/stable/elasticsearch-analysis-pinyin-${ES_VERSION}.zip"
-          )
           for p in "${OFFICIAL_PLUGINS[@]}"; do
             URL="https://artifacts.elastic.co/downloads/elasticsearch-plugins/${p}/${p}-${ES_VERSION}.zip"
             echo "下载官方插件: $p"
-            curl -fSL --retry 3 -o "plugins/${p}-${ES_VERSION}.zip" "$URL"
+            curl -fSL --retry 3 --retry-delay 5 -o "plugins/${p}-${ES_VERSION}.zip" "$URL"
           done
-          for item in "${COMMUNITY_PLUGINS[@]}"; do
-            p="${item%%|*}"; URL="${item##*|}"
-            echo "下载社区插件: $p"
-            curl -fSL --retry 3 -o "plugins/${p}-${ES_VERSION}.zip" "$URL"
-          done
-          
+
+          # 社区插件（INFINI Labs 维护），URL 前缀不同
+          if [ "${{ inputs.include_community_plugins }}" = "true" ]; then
+            declare -A COMMUNITY_PLUGINS=(
+              ["analysis-ik"]="https://release.infinilabs.com/analysis-ik/stable/elasticsearch-analysis-ik-${ES_VERSION}.zip"
+              ["analysis-pinyin"]="https://release.infinilabs.com/analysis-pinyin/stable/elasticsearch-analysis-pinyin-${ES_VERSION}.zip"
+            )
+            for p in "${!COMMUNITY_PLUGINS[@]}"; do
+              URL="${COMMUNITY_PLUGINS[$p]}"
+              echo "下载社区插件: $p"
+              curl -fSL --retry 3 --retry-delay 5 -o "plugins/${p}-${ES_VERSION}.zip" "$URL"
+            done
+          fi
+
           echo "=========================================="
-          echo "插件下载完成，文件列表如下："
+          echo "插件下载完成，文件列表："
           ls -lh plugins/
           echo "=========================================="
 
-      - name: Upload Elasticsearch Image Artifact
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          # archive: false 模式下 name 会被忽略，artifact 名称即为上传的文件名
-          path: elasticsearch-${{ env.ES_VERSION }}-image.tar.gz
-          archive: false
-          retention-days: 1
-          if-no-files-found: error
+      - name: Build Custom Image with Plugins
+        run: |
+          set -euo pipefail
+          echo "=========================================="
+          echo "2. 生成 Dockerfile 并构建含插件的镜像 ..."
+          echo "=========================================="
 
-      - name: Upload Elasticsearch Plugins Artifact
+          # 动态生成 Dockerfile：为每个插件 zip 生成一条 COPY + 一段 RUN 安装命令
+          {
+            echo "FROM elasticsearch:${ES_VERSION}"
+            for zip in plugins/*.zip; do
+              zip_name=$(basename "$zip")
+              echo "COPY ${zip_name} /tmp/${zip_name}"
+            done
+            # 一条 RUN 内完成全部安装并清理，减少镜像层数
+            echo -n "RUN"
+            first=true
+            for zip in plugins/*.zip; do
+              zip_name=$(basename "$zip")
+              if [ "$first" = true ]; then
+                echo -n " /usr/share/elasticsearch/bin/elasticsearch-plugin install --batch file:///tmp/${zip_name}"
+                first=false
+              else
+                echo -n " && \\"
+                echo ""
+                echo -n "    /usr/share/elasticsearch/bin/elasticsearch-plugin install --batch file:///tmp/${zip_name}"
+              fi
+            done
+            echo " && rm -f /tmp/*.zip"
+          } > Dockerfile
+
+          echo "---------- 生成的 Dockerfile ----------"
+          cat Dockerfile
+          echo "---------------------------------------"
+
+          docker build -t "$FINAL_IMAGE" .
+
+          echo "=========================================="
+          echo "构建完成，验证镜像内已安装的插件："
+          echo "=========================================="
+          docker run --rm --entrypoint /usr/share/elasticsearch/bin/elasticsearch-plugin \
+            "$FINAL_IMAGE" list
+
+      - name: Package Final Image
+        run: |
+          set -euo pipefail
+          echo "=========================================="
+          echo "3. 导出镜像并 gzip 极限压缩..."
+          echo "=========================================="
+          OUTPUT_NAME="elasticsearch-${ES_VERSION}-with-plugins.tar.gz"
+          docker save "$FINAL_IMAGE" | gzip -9 > "$OUTPUT_NAME"
+
+          echo "=========================================="
+          echo "打包成功！最终离线镜像包大小："
+          du -sh "$OUTPUT_NAME"
+          echo "=========================================="
+
+      - name: Upload Final Image Artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: elasticsearch-${{ env.ES_VERSION }}-plugins
-          path: plugins/*.zip
+          path: elasticsearch-${{ env.ES_VERSION }}-with-plugins.tar.gz
+          archive: false
           retention-days: 1
           if-no-files-found: error
