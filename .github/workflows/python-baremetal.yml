@@ -1,0 +1,251 @@
+name: Download Python Offline Package for Ubuntu 22.04
+
+on:
+  workflow_dispatch:
+    inputs:
+      python_version:
+        description: 'Python version to download (e.g. 3.14.8)'
+        required: true
+        default: '3.14.8'
+      include_standalone:
+        description: 'Also fetch python-build-standalone binary (Route 2)'
+        type: boolean
+        default: false
+      include_deadsnakes:
+        description: 'Also fetch deadsnakes deb packages (Route 3)'
+        type: boolean
+        default: false
+
+env:
+  PY_VER: ${{ github.event.inputs.python_version || '3.14.8' }}
+
+jobs:
+  prepare:
+    name: Download & package offline files
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Workspace setup
+        run: |
+          mkdir -p output/source output/deps-deb output/standalone output/deadsnakes
+          echo "=== Ubuntu ==="; lsb_release -a
+          echo "=== Arch ===";   uname -m
+
+      # ========== Route 1a: Python 源码 tarball ==========
+      - name: Restore cached Python source
+        id: cache-source
+        uses: actions/cache@v6.1.0
+        with:
+          path: output/source/Python-${{ env.PY_VER }}.tar.xz
+          key: py-source-${{ env.PY_VER }}-v1
+
+      - name: Download Python source tarball
+        if: steps.cache-source.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          URL="https://www.python.org/ftp/python/${PY_VER}/Python-${PY_VER}.tar.xz"
+          echo "Downloading: $URL"
+          wget -q --show-progress "$URL" -O output/source/Python-${PY_VER}.tar.xz
+
+      - name: Generate source checksum
+        run: |
+          cd output/source
+          sha256sum Python-${PY_VER}.tar.xz | tee SHA256SUMS.txt
+          ls -lh
+
+      # ========== Route 1b: 构建依赖 deb 闭包 ==========
+      - name: Download build dependency deb packages
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+
+          BUILD_DEPS=(
+            build-essential pkg-config xz-utils
+            libssl-dev zlib1g-dev libbz2-dev liblzma-dev
+            libreadline-dev libsqlite3-dev libncurses-dev
+            libffi-dev libgdbm-dev libgdbm-compat-dev uuid-dev tk-dev
+          )
+
+          echo "=== Resolving dependency closure ==="
+          PKGS=$(apt-cache depends --recurse --no-recommends --no-suggests \
+            --no-conflicts --no-breaks --no-replaces --no-enhances \
+            "${BUILD_DEPS[@]}" | grep -E '^[a-zA-Z0-9]' | sort -u)
+
+          echo "Closure size: $(echo "$PKGS" | wc -l)"
+          echo "$PKGS" > output/deps-deb/dep-list.txt
+
+          echo "=== Batch download ==="
+          cd output/deps-deb
+          echo "$PKGS" | xargs -n 40 apt-get download 2>/dev/null || true
+
+          echo "=== Retry individual failures ==="
+          for p in $PKGS; do
+            if ! ls "${p}_"*.deb >/dev/null 2>&1; then
+              apt-get download "$p" 2>/dev/null || echo "[skip] $p (virtual)"
+            fi
+          done
+
+          DEB_COUNT=$(ls -1 ./*.deb 2>/dev/null | wc -l)
+          echo "Downloaded $DEB_COUNT deb files"
+          [ "$DEB_COUNT" -gt 0 ]
+
+      # ========== Route 2: python-build-standalone 预编译二进制 ==========
+      - name: Restore cached python-build-standalone
+        if: inputs.include_standalone
+        id: cache-standalone
+        uses: actions/cache@v4
+        with:
+          path: output/standalone/*.tar.gz
+          key: pbs-${{ env.PY_VER }}-v1
+
+      - name: Download python-build-standalone
+        if: inputs.include_standalone
+        run: |
+          set -euo pipefail
+          PY_BRANCH="${PY_VER%.*}"   # 3.14.0 -> 3.14
+
+          echo "=== Query latest python-build-standalone release ==="
+          TAG=$(curl -sfL https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest \
+                  | jq -r '.tag_name')
+          echo "Latest tag: $TAG"
+
+          echo "=== Locating install_only archive ==="
+          FILE=$(curl -sfL "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${TAG}" \
+                  | jq -r --arg pfx "cpython-${PY_BRANCH}" '
+                      .assets[]
+                      | select(.name | startswith($pfx))
+                      | select(.name | contains("x86_64-unknown-linux-gnu"))
+                      | select(.name | contains("install_only"))
+                      | select(.name | contains("freethreaded") | not)
+                      | .name' | head -n 1)
+
+          if [ -z "$FILE" ]; then
+            echo "::error::No install_only archive matched cpython-${PY_BRANCH}!"
+            echo "Available cpython-${PY_BRANCH} assets (first 30):"
+            curl -sfL "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${TAG}" \
+              | jq -r --arg pfx "cpython-${PY_BRANCH}" \
+                      '.assets[] | select(.name | startswith($pfx)) | .name' | head -30
+            exit 1
+          fi
+          echo "Matched file: $FILE"
+
+          URL="https://github.com/astral-sh/python-build-standalone/releases/download/${TAG}/${FILE}"
+          wget -q --show-progress "$URL" -O "output/standalone/${FILE}"
+          (cd output/standalone && sha256sum "$FILE" | tee SHA256SUMS.txt)
+
+      # ========== Route 3: deadsnakes deb 包 ==========
+      - name: Download deadsnakes python3.14 debs
+        if: inputs.include_deadsnakes
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq software-properties-common
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get update -qq
+
+          cd output/deadsnakes
+          PKGS_INPUT=(python3.14 python3.14-venv python3.14-dev)
+
+          echo "=== Resolving deadsnakes dependency closure ==="
+          PKGS=$(apt-cache depends --recurse --no-recommends --no-suggests \
+            --no-conflicts --no-breaks --no-replaces --no-enhances \
+            "${PKGS_INPUT[@]}" | grep -E '^[a-zA-Z0-9]' | sort -u)
+
+          echo "Closure size: $(echo "$PKGS" | wc -l)"
+          echo "$PKGS" > deadsnakes-dep-list.txt
+
+          echo "=== Batch download ==="
+          echo "$PKGS" | xargs -n 40 apt-get download 2>/dev/null || true
+
+          echo "=== Retry individual failures ==="
+          for p in $PKGS; do
+            if ! ls "${p}_"*.deb >/dev/null 2>&1; then
+              apt-get download "$p" 2>/dev/null || echo "[skip] $p"
+            fi
+          done
+
+          DEB_COUNT=$(ls -1 ./*.deb 2>/dev/null | wc -l)
+          echo "Downloaded $DEB_COUNT deadsnakes debs"
+          [ "$DEB_COUNT" -gt 0 ]
+
+      # ========== 打包与上传 ==========
+      - name: Inventory
+        run: |
+          echo "=== Files ==="
+          find output -type f | sort
+          echo ""
+          echo "=== Size ==="
+          du -sh output/*
+
+      - name: Create combined tarball
+        run: |
+          set -euo pipefail
+          cd output
+          tar -czf ../python-${PY_VER}-ubuntu2204-offline.tar.gz .
+          cd ..
+          sha256sum python-${PY_VER}-ubuntu2204-offline.tar.gz \
+            | tee python-${PY_VER}-ubuntu2204-offline.tar.gz.sha256
+          ls -lh
+
+      - name: Upload combined bundle
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: python-${{ env.PY_VER }}-ubuntu2204-offline-bundle
+          path: |
+            python-${{ env.PY_VER }}-ubuntu2204-offline.tar.gz
+            python-${{ env.PY_VER }}-ubuntu2204-offline.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Route 1a (source tarball)
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: py314-source-tarball
+          path: output/source/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Route 1b (build deps)
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: py314-build-deps-jammy
+          path: output/deps-deb/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Route 2 (standalone)
+        if: inputs.include_standalone
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: py314-standalone-x86_64
+          path: output/standalone/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Route 3 (deadsnakes)
+        if: inputs.include_deadsnakes
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: py314-deadsnakes-jammy
+          path: output/deadsnakes/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Job summary
+        run: |
+          {
+            echo "# Python ${PY_VER} Offline Package Summary"
+            echo ""
+            echo "| Artifact | Contents | Size |"
+            echo "|---|---|---|"
+            echo "| source tarball | Python-${PY_VER}.tar.xz | $(du -h output/source/Python-${PY_VER}.tar.xz | cut -f1) |"
+            echo "| build deps | $(ls output/deps-deb/*.deb | wc -l) debs | $(du -sh output/deps-deb | cut -f1) |"
+            if [ "${{ inputs.include_standalone }}" = "true" ]; then
+              echo "| standalone binary | $(ls output/standalone/*.tar.gz) | $(du -sh output/standalone | cut -f1) |"
+            fi
+            if [ "${{ inputs.include_deadsnakes }}" = "true" ]; then
+              echo "| deadsnakes | $(ls output/deadsnakes/*.deb | wc -l) debs | $(du -sh output/deadsnakes | cut -f1) |"
+            fi
+            echo ""
+            echo "## SHA256"
+            echo '
