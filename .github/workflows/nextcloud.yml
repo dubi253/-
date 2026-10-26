@@ -12,7 +12,8 @@ jobs:
         run: |
           # 定义 NextCloud 相关的镜像
           IMAGES=(
-            "nextcloud:latest"
+            "nextcloud:33.0.10"
+            "nextcloud:34.0.5"
           )
 
           echo "=========================================="
