@@ -30,8 +30,8 @@ jobs:
 
       - name: Build Offline-ready OpenWebUI Image
         run: |
-          WEBUI_VERSION="latest"
-          TARGET_IMAGE="latest"
+          WEBUI_VERSION="ghcr.io/open-webui/open-webui:latest"
+          TARGET_IMAGE="ghcr.io/open-webui/open-webui:latest"
 
           if [ -z "$WEBUI_VERSION" ] || [ -z "$TARGET_IMAGE" ]; then
             echo "Error: WEBUI_VERSION 或 TARGET_IMAGE 为空"
