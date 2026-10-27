@@ -23,6 +23,40 @@ jobs:
             docker pull "$img"
           done
 
+      - name: Checkout Repository
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Build Offline-ready OpenWebUI Image
+        run: |
+          WEBUI_VERSION="latest"
+          TARGET_IMAGE="latest"
+
+          if [ -z "$WEBUI_VERSION" ] || [ -z "$TARGET_IMAGE" ]; then
+            echo "Error: WEBUI_VERSION 或 TARGET_IMAGE 为空"
+            exit 1
+          fi
+
+          echo "=========================================="
+          echo "正在构建离线增强版 Open WebUI 镜像..."
+          echo "Helm 版本: $WEBUI_VERSION"
+          echo "基础镜像: $TARGET_IMAGE"
+          echo "输出标签: $TARGET_IMAGE"
+          echo "=========================================="
+
+          docker build \
+            --pull=false \
+            --build-arg BASE_IMAGE="$TARGET_IMAGE" \
+            -f open-webui/Dockerfile \
+            -t "$TARGET_IMAGE" \
+            open-webui
+
+          docker image inspect "$TARGET_IMAGE" >/dev/null
+          echo "定制镜像构建完成，已覆盖标签: $TARGET_IMAGE"
+          
+      - name: Save All Images
+        run: |
           echo "=========================================="
           echo "2. 正在合并打包并进行 gzip 极限压缩..."
           echo "=========================================="
