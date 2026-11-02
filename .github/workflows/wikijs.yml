@@ -11,7 +11,8 @@ jobs:
       - name: Pull and Package Images
         run: |
           IMAGES=(
-            "requarks/wiki:3.0.2"
+            "ghcr.io/requarks/wiki:3"
+            "ghcr.io/requarks/wiki:2"
             "postgres:18"
           )
           OUTPUT_NAME="wikijs-images.tar.gz"
