@@ -1,0 +1,26 @@
+name: Download Everything Installer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Download Everything Installer
+        run: |
+          wget -c https://www.voidtools.com/Everything-1.5.0.1424b.x64-Setup.exe
+          wget -c https://www.voidtools.com/Everything-1.5.0.1424b.x64.zip
+          wget -c https://www.voidtools.com/Everything-1.4.1.1032.x64.Lite-Setup.exe
+          wget -c https://www.voidtools.com/Everything-1.4.1.1032.x64.zip
+          wget -c https://www.voidtools.com/Everything-1.4.1.1032.x64-Setup.exe
+
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: Everything-Build
+          path: Everything*
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
