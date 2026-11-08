@@ -35,6 +35,8 @@ jobs:
           du -sh "$OUTPUT_NAME"
           echo "=========================================="
 
+          wget -c https://github.com/requarks/wiki-locales/archive/refs/heads/main.zip
+
           
 
       - name: Upload Artifact to GitHub
@@ -43,3 +45,11 @@ jobs:
           path: wikijs-images.tar.gz
           retention-days: 1
           archive: false
+
+      - name: Upload wiki-locales to GitHub
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          path: *.zip
+          retention-days: 1
+          archive: false
+
