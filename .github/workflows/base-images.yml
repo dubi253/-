@@ -1,0 +1,77 @@
+name: Download Base Images Suite
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull and Package Node Images
+        run: |
+          # 定义 Node 相关的镜像
+          IMAGES=(
+            "alpine:latest"
+            "busybox:latest"
+            "ubuntu:22.04"
+            "ubuntu:24.04"
+            "ubuntu:26.04"
+            "debian:latest"
+            "nginx:alpine"
+            "tomcat:jre25"
+            "tomcat:jre21"
+            "tomcat:jre17"
+            "eclipse-temurin:25-jre"
+            "eclipse-temurin:21-jre"
+            "eclipse-temurin:17-jre"
+            "node:26-slim"
+            "node:24-slim"
+            "node:22-slim"
+            "python:3.10-slim"
+            "python:3.11-slim"
+            "python:3.12-slim"
+            "python:3.13-slim"
+            "python:3.14-slim"
+            "python:3.15-slim"
+            "golang:alpine"
+            "mysql:26"
+            "mysql:9"
+            "mysql:8"
+            "postgres:18"
+            "postgres:17"
+            "postgres:16"
+            "redis:latest"
+            "memcached:latest"
+            "rabbitmq:management"
+            "mongo:9"
+            )
+
+          echo "=========================================="
+          echo "1. 开始拉取 Node 镜像（共 ${#IMAGES[@]} 个）..."
+          echo "=========================================="
+          for img in "${IMAGES[@]}"; do
+            echo "正在下载: $img ..."
+            docker pull "$img"
+          done
+
+          echo "=========================================="
+          echo "3. 正在合并打包并进行 gzip 极限压缩..."
+          echo "=========================================="
+          OUTPUT_NAME="base-images.tar.gz"
+          docker save "${IMAGES[@]}" | gzip | split -b 4900M -d - "$OUTPUT_NAME.part"
+
+          echo "=========================================="
+          echo "打包分片成功！Base Images 离线包总大小为："
+          du -sh "$OUTPUT_NAME".part*
+          echo "=========================================="
+          echo "分片文件列表："
+          ls -lh "$OUTPUT_NAME".part*
+          echo "=========================================="
+          echo "加载镜像命令（在目标机器上执行）："
+          echo "  cat $OUTPUT_NAME.part* | docker load"
+          echo "=========================================="
+
+      - name: Upload Artifact to GitHub
+        uses: dubi253/upload-artifacts@v1.0.7
+        with:
+          path: base-images.tar.gz.part*
