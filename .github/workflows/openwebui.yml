@@ -24,7 +24,7 @@ jobs:
 
       # ========== 1. 设置 Kubernetes 工具 ==========
       - name: Setup Kubernetes Tools
-        uses: yokawasa/action-setup-kube-tools@v0.14.0
+        uses: yokawasa/action-setup-kube-tools@v0.14.1
         with:
           setup-tools: |
             helm
