@@ -12,6 +12,7 @@ jobs:
           # 定义 GitLab CE 镜像
           IMAGES=(
             "gitlab/gitlab-ce:latest"
+            "gitlab/gitlab-runner:latest"
           )
           echo "=========================================="
           echo "1. 开始拉取 GitLab CE 镜像（共 ${#IMAGES[@]} 个）..."
