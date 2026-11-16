@@ -12,7 +12,7 @@ jobs:
         run: |
           IMAGES=(
             "ghcr.io/requarks/wiki:3"
-            "ghcr.io/requarks/wiki:2"
+            # "ghcr.io/requarks/wiki:2"
             "postgres:18"
           )
           OUTPUT_NAME="wikijs-images.tar.gz"
