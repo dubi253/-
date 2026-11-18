@@ -10,10 +10,10 @@ jobs:
       - name: Pull and Package All Homepage Images
         run: |
           # 定义 Homepage 相关的镜像
-          IMAGES=(
-            "ghcr.io/gethomepage/homepage:latest"
-            "ghcr.io/lissy93/dashy:latest"
-            "linuxserver/heimdall:latest"
+          # IMAGES=(
+          #   "ghcr.io/gethomepage/homepage:latest"
+          #   "ghcr.io/lissy93/dashy:latest"
+          #   "linuxserver/heimdall:latest"
             "b4bz/homer:latest"
           )
 
