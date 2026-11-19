@@ -1,34 +1,47 @@
-name: Download BabelDOC Offline Assets
+name: Generate BabelDOC Offline Assets (multi Python)
 
 on:
-  workflow_dispatch:        # 支持手动触发
+  workflow_dispatch:
+    inputs:
+      babeldoc_version:
+        description: 'BabelDOC 版本（留空 = 最新版）'
+        required: false
+        default: ''
 
 jobs:
   generate-assets:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # 某个版本失败不影响其他版本继续
+      matrix:
+        python-version: ['3.11', '3.12', '3.13', '3.14']
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7.0.1
-
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v7.1.0
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install BabelDOC
+        env:
+          BABELDOC_VERSION: ${{ inputs.babeldoc_version }}
         run: |
           python -m pip install --upgrade pip
-          pip install "BabelDOC[openai]"
+          if [ -n "$BABELDOC_VERSION" ]; then
+            pip install "BabelDOC[openai]==$BABELDOC_VERSION"
+          else
+            pip install "BabelDOC[openai]"
+          fi
+          python --version
+          babeldoc --version
 
       - name: Generate offline assets
-        run: |
-          babeldoc --generate-offline-assets ./babeldoc-assets
+        run: babeldoc --generate-offline-assets ./babeldoc-assets
 
       - name: Upload offline assets
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: babeldoc-offline-assets
+          name: babeldoc-assets-py${{ matrix.python-version }}
           path: ./babeldoc-assets
           retention-days: 1
           if-no-files-found: error
