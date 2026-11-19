@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false # 某个版本失败不影响其他版本继续
       matrix:
-        python-version: ['3.11', '3.12', '3.13', '3.14']
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
     steps:
       - name: Set up Python ${{ matrix.python-version }}
